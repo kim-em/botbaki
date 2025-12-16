@@ -88,10 +88,26 @@ def full_sync(
         # Filter to PRs updated since cutoff
         recent_prs = [pr for pr in prs if pr['updated_at'] >= since_str]
 
-        if verbose:
-            print(f"got {len(prs)} PRs, {len(recent_prs)} since cutoff")
+        # Check if any PRs on this page are new or updated
+        changed_prs = []
+        for pr in recent_prs:
+            existing = database.get_pr_by_number(repo_id, pr['number'])
+            if not existing or existing['updated_at'] != pr['updated_at']:
+                changed_prs.append(pr)
 
-        all_prs.extend(recent_prs)
+        if verbose:
+            if changed_prs:
+                print(f"got {len(prs)} PRs, {len(recent_prs)} since cutoff, {len(changed_prs)} new/updated")
+            else:
+                print(f"got {len(prs)} PRs, {len(recent_prs)} since cutoff, all unchanged")
+
+        all_prs.extend(changed_prs)
+
+        # Early exit if we've seen a full page with no changes
+        if len(recent_prs) > 0 and len(changed_prs) == 0:
+            if verbose:
+                print("All recent PRs on this page are already up to date, stopping early")
+            break
 
         # Stop if we've gone past our date threshold
         if len(recent_prs) < len(prs):
@@ -111,21 +127,10 @@ def full_sync(
     if verbose:
         print("\n=== Phase 2: Syncing PR details ===")
 
-    synced_count = 0
-    skipped_count = 0
-
+    # all_prs already contains only new/updated PRs from Phase 1
     for i, pr in enumerate(all_prs, 1):
         pr_number = pr['number']
-
-        # Check if PR already exists and hasn't been updated
         existing_pr = database.get_pr_by_number(repo_id, pr_number)
-
-        if existing_pr and existing_pr['updated_at'] == pr['updated_at']:
-            # PR hasn't changed since last sync - skip it
-            skipped_count += 1
-            if verbose:
-                print(f"[{i}/{len(all_prs)}] PR #{pr_number}: {pr['title'][:60]}... (unchanged, skipped)")
-            continue
 
         if verbose:
             status = "(updated)" if existing_pr else "(new)"
@@ -147,10 +152,8 @@ def full_sync(
             reviews=0  # We don't have a count for reviews
         )
 
-        synced_count += 1
-
         # Print progress every 10 PRs
-        if verbose and synced_count % 10 == 0:
+        if verbose and i % 10 == 0:
             client.print_rate_limit_status()
 
     # Update repository sync state
@@ -161,7 +164,7 @@ def full_sync(
     )
 
     if verbose:
-        print(f"\n=== Sync complete: {synced_count} PRs synced, {skipped_count} unchanged ===")
+        print(f"\n=== Sync complete: {len(all_prs)} PRs synced ===")
         client.print_rate_limit_status()
 
 
