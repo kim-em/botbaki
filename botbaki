@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Botbaki launcher script."""
+
+import sys
+from pathlib import Path
+
+# Add parent directory to path so we can import 'src' as a package
+sys.path.insert(0, str(Path(__file__).parent))
+
+from src.cli import main
+
+if __name__ == '__main__':
+    sys.exit(main())
