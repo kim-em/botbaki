@@ -16,9 +16,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
     """Handle sync command."""
     try:
         if args.incremental:
-            sync.incremental_sync(args.repository, verbose=True)
+            sync.incremental_sync(args.repository, request_delay=args.delay, verbose=True)
         elif args.pr:
-            sync.sync_single_pr(args.repository, args.pr, verbose=True)
+            sync.sync_single_pr(args.repository, args.pr, request_delay=args.delay, verbose=True)
         else:
             # Full sync
             since = None
@@ -30,7 +30,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
                     print("Use ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS", file=sys.stderr)
                     return 1
 
-            sync.full_sync(args.repository, since=since, verbose=True)
+            sync.full_sync(args.repository, since=since, request_delay=args.delay,
+                          force=args.force, verbose=True)
 
         return 0
 
@@ -419,6 +420,46 @@ def cmd_rate_limit(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    """Handle review command."""
+    try:
+        from . import review as review_module
+
+        result = review_module.generate_pr_review(
+            full_name=args.repository,
+            pr_number=args.pr_number,
+            commit_sha=args.commit,
+            prompt_date=args.prompt_date,
+            include_timeline=not args.diff_only,
+            force=args.force,
+            verbose=True
+        )
+
+        # Print review to stdout
+        print("\n" + "="*80)
+        print(f"AI Review for PR #{args.pr_number}")
+        print(f"Commit: {result['commit_sha'][:8]}")
+        print(f"Model: {result['model_used']} ({result['generation_method']})")
+        print(f"Prompt: {result['prompt_path']}")
+        if result.get('cached'):
+            print(f"Status: CACHED (returning existing review)")
+        print("="*80 + "\n")
+        print(result['review_text'])
+        print("\n" + "="*80)
+        if result.get('cached'):
+            print(f"Cached review (ID: {result['review_id']})")
+        else:
+            print(f"Review saved to database (ID: {result['review_id']})")
+        print("="*80 + "\n")
+
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -432,6 +473,9 @@ def main() -> int:
     sync_parser.add_argument('--since', help='Full sync: PRs updated since this date (ISO format)')
     sync_parser.add_argument('--incremental', action='store_true', help='Incremental sync (update only changed PRs)')
     sync_parser.add_argument('--pr', type=int, help='Sync a specific PR number')
+    sync_parser.add_argument('--force', action='store_true', help='Force re-sync of all PRs even if unchanged')
+    sync_parser.add_argument('--delay', type=float, default=0.9,
+                             help='Delay between requests in seconds (default: 0.9 = ~4000 req/hour, leaving 1000 spare)')
 
     # list command
     list_parser = subparsers.add_parser('list', help='List PRs')
@@ -458,6 +502,17 @@ def main() -> int:
     # rate-limit command
     subparsers.add_parser('rate-limit', help='Show GitHub API rate limit status')
 
+    # review command
+    review_parser = subparsers.add_parser('review', help='Generate AI review for a PR')
+    review_parser.add_argument('repository', help='Repository (owner/repo)')
+    review_parser.add_argument('pr_number', type=int, help='PR number')
+    review_parser.add_argument('--commit', help='Review at specific commit SHA')
+    review_parser.add_argument('--prompt-date', help='Use prompt from date (YYYY-MM-DD)')
+    review_parser.add_argument('--diff-only', action='store_true',
+                              help='Review only the diff, exclude timeline/comments')
+    review_parser.add_argument('--force', action='store_true',
+                              help='Regenerate review even if one exists')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -477,6 +532,8 @@ def main() -> int:
         return cmd_stats(args)
     elif args.command == 'rate-limit':
         return cmd_rate_limit(args)
+    elif args.command == 'review':
+        return cmd_review(args)
     else:
         parser.print_help()
         return 1

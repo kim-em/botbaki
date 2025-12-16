@@ -1,0 +1,148 @@
+#!/bin/bash
+# claude-available-model - Returns available Claude model based on quota
+#
+# Usage: claude-available-model [--verbose]
+#
+# Checks quota and returns the best available model:
+# - Exit 0 + "opus" on stdout → Opus quota available (session + weekly OK)
+# - Exit 0 + "sonnet" on stdout → Sonnet quota available (Opus low)
+# - Exit 1 → No quota available
+#
+# Quota thresholds (used < 10 + time * rate):
+#   Session:  70% (conservative to preserve within-session quota)
+#   Weekly:   50% (very conservative to stretch Opus across the week)
+#   Sonnet:   80% (standard rate for fallback model)
+#
+# Options:
+#   --verbose  Print quota status table to stderr
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLAUDE_USAGE="$SCRIPT_DIR/claude-usage"
+
+VERBOSE=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --verbose|-v)
+            VERBOSE=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: claude-available-model [--verbose]"
+            echo ""
+            echo "Returns the available Claude model based on quota."
+            echo "Exits 0 with model name on stdout, or exits 1 if no quota."
+            echo ""
+            echo "Options:"
+            echo "  --verbose  Print quota status table to stderr"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Colors for verbose output
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+RESET='\033[0m'
+
+# Format quota status with indicator
+format_quota() {
+    local used="$1"
+    local time="$2"
+    local label="$3"
+    local resets="$4"
+    local rate="${5:-80}"
+
+    # Handle null/empty values
+    if [[ -z "$used" || ! "$used" =~ ^[0-9]+$ ]]; then
+        used="n/a"
+    fi
+    if [[ -z "$time" || ! "$time" =~ ^[0-9]+$ ]]; then
+        time="n/a"
+    fi
+
+    local indicator
+    if has_quota "$1" "$2" "$rate"; then
+        indicator="${GREEN}✓${RESET}"
+    else
+        indicator="${RED}✗${RESET}"
+    fi
+
+    printf "  %-10s %3s%% used / %3s%% time %b  (resets %s)\n" "$label:" "$used" "$time" "$indicator" "$resets"
+}
+
+# Check if quota is available: used < 10 + time * rate
+# Args: used time rate (rate as percentage, e.g., 70 for 0.7)
+# Returns false if used or time is empty/null
+has_quota() {
+    local used="$1"
+    local time="$2"
+    local rate="${3:-80}"  # default to 80% if not specified
+
+    # Handle empty or non-numeric values
+    if [[ -z "$used" || -z "$time" || ! "$used" =~ ^[0-9]+$ || ! "$time" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+
+    local threshold=$((10 + time * rate / 100))
+    [ "$used" -lt "$threshold" ]
+}
+
+# Get quota data
+json=$("$CLAUDE_USAGE")
+
+# Extract values for all three categories
+session_used=$(echo "$json" | grep -A2 '"session"' | grep 'percent_used' | grep -o '[0-9]*')
+session_time=$(echo "$json" | grep -A3 '"session"' | grep 'percent_time_elapsed' | grep -o '[0-9]*')
+session_resets=$(echo "$json" | grep -A4 '"session"' | grep 'resets' | sed 's/.*: *"//' | sed 's/".*//')
+
+weekly_used=$(echo "$json" | grep -A2 '"week_all_models"' | grep 'percent_used' | grep -o '[0-9]*')
+weekly_time=$(echo "$json" | grep -A3 '"week_all_models"' | grep 'percent_time_elapsed' | grep -o '[0-9]*')
+weekly_resets=$(echo "$json" | grep -A4 '"week_all_models"' | grep 'resets' | sed 's/.*: *"//' | sed 's/".*//')
+
+sonnet_used=$(echo "$json" | grep -A2 '"week_sonnet_only"' | grep 'percent_used' | grep -o '[0-9]*')
+sonnet_time=$(echo "$json" | grep -A3 '"week_sonnet_only"' | grep 'percent_time_elapsed' | grep -o '[0-9]*')
+sonnet_resets=$(echo "$json" | grep -A4 '"week_sonnet_only"' | grep 'resets' | sed 's/.*: *"//' | sed 's/".*//')
+
+# Verbose output to stderr
+if $VERBOSE; then
+    {
+        echo ""
+        format_quota "$session_used" "$session_time" "Session" "$session_resets" 70
+        format_quota "$weekly_used" "$weekly_time" "Weekly" "$weekly_resets" 50
+        format_quota "$sonnet_used" "$sonnet_time" "Sonnet" "$sonnet_resets" 80
+        echo ""
+    } >&2
+fi
+
+# Check quota priority:
+# 1. If session AND weekly (all models) have quota → use Opus
+# 2. If Sonnet-only has quota → use Sonnet
+# 3. Otherwise → no quota available
+
+if has_quota "$session_used" "$session_time" 70 && has_quota "$weekly_used" "$weekly_time" 50; then
+    if $VERBOSE; then
+        echo -e "  ${GREEN}✓ Opus available${RESET}" >&2
+    fi
+    echo "opus"
+    exit 0
+elif has_quota "$sonnet_used" "$sonnet_time" 80; then
+    if $VERBOSE; then
+        echo -e "  ${YELLOW}⚡ Sonnet available${RESET}" >&2
+    fi
+    echo "sonnet"
+    exit 0
+else
+    if $VERBOSE; then
+        echo -e "  ${RED}✗ No quota available${RESET}" >&2
+    fi
+    exit 1
+fi

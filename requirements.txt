@@ -1,2 +1,3 @@
-# No external dependencies required
-# Uses Python standard library: sqlite3, json, subprocess, urllib
+# Core dependencies (Python standard library only for basic functionality)
+# For AI review generation:
+anthropic>=0.40.0

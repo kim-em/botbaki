@@ -248,3 +248,23 @@ CREATE TRIGGER IF NOT EXISTS pull_requests_ai AFTER INSERT ON pull_requests BEGI
   INSERT INTO pull_requests_fts(rowid, title, body, author_login)
   VALUES (new.id, new.title, COALESCE(new.body, ''), new.author_login);
 END;
+
+-- AI-generated PR reviews
+CREATE TABLE IF NOT EXISTS pr_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pr_id INTEGER NOT NULL REFERENCES pull_requests(id),
+  pr_number INTEGER NOT NULL,
+  commit_sha TEXT NOT NULL,
+  reviewed_at TEXT NOT NULL,
+  prompt_path TEXT NOT NULL,
+  prompt_hash TEXT NOT NULL,
+  review_text TEXT NOT NULL,
+  model_used TEXT NOT NULL,
+  generation_method TEXT NOT NULL,
+  raw_metadata TEXT,
+  UNIQUE(pr_id, commit_sha, prompt_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pr_reviews_pr ON pr_reviews(pr_id);
+CREATE INDEX IF NOT EXISTS idx_pr_reviews_commit ON pr_reviews(commit_sha);
+CREATE INDEX IF NOT EXISTS idx_pr_reviews_timestamp ON pr_reviews(reviewed_at);

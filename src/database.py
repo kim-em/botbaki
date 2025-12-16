@@ -496,3 +496,78 @@ def search_comments(query: str, limit: int = 50) -> List[Dict[str, Any]]:
     """, (query, query, limit))
 
     return [dict(row) for row in cursor.fetchall()]
+
+
+# PR Review operations
+
+def store_pr_review(
+    pr_id: int,
+    pr_number: int,
+    commit_sha: str,
+    prompt_path: str,
+    prompt_hash: str,
+    review_text: str,
+    model_used: str,
+    generation_method: str,
+    metadata: Optional[Dict[str, Any]] = None
+) -> int:
+    """Store PR review (idempotent via UNIQUE constraint)."""
+    db = get_database()
+    cursor = db.execute("""
+        INSERT OR IGNORE INTO pr_reviews
+        (pr_id, pr_number, commit_sha, reviewed_at, prompt_path,
+         prompt_hash, review_text, model_used, generation_method, raw_metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        pr_id, pr_number, commit_sha, datetime.now().isoformat(),
+        prompt_path, prompt_hash, review_text, model_used,
+        generation_method, json.dumps(metadata) if metadata else None
+    ))
+    db.commit()
+    return cursor.lastrowid
+
+
+def get_pr_reviews(pr_id: int) -> List[Dict[str, Any]]:
+    """Get all reviews for a PR, ordered by newest first."""
+    db = get_database()
+    cursor = db.execute("""
+        SELECT * FROM pr_reviews
+        WHERE pr_id = ?
+        ORDER BY reviewed_at DESC
+    """, (pr_id,))
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_latest_prompt_for_repo(repo_name: str) -> Optional[Tuple[str, str, str]]:
+    """
+    Find most recent prompt file for a repository.
+    Returns (prompt_path, prompt_content, prompt_hash) or None.
+    """
+    import hashlib
+    prompts_dir = Path(__file__).parent.parent / "prompts" / repo_name
+    if not prompts_dir.exists():
+        return None
+
+    # YYYY-MM-DD format sorts chronologically
+    prompt_files = sorted(prompts_dir.glob("*.md"), reverse=True)
+    if not prompt_files:
+        return None
+
+    latest = prompt_files[0]
+    content = latest.read_text()
+    content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    return (str(latest.relative_to(Path(__file__).parent.parent)), content, content_hash)
+
+
+def get_prompt_by_date(repo_name: str, date: str) -> Optional[Tuple[str, str, str]]:
+    """Get prompt for specific date (YYYY-MM-DD format)."""
+    import hashlib
+    prompt_file = Path(__file__).parent.parent / "prompts" / repo_name / f"{date}.md"
+    if not prompt_file.exists():
+        return None
+
+    content = prompt_file.read_text()
+    content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    return (str(prompt_file.relative_to(Path(__file__).parent.parent)), content, content_hash)

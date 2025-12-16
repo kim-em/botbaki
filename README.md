@@ -44,8 +44,20 @@ Sync last 2 months of PRs from mathlib4:
 This will:
 - Fetch all PRs updated since the specified date
 - Store PR metadata, commits, comments, and reviews
-- Take approximately 25 minutes for 2 months of mathlib4 data
-- Use ~13,500 API requests (well under GitHub's 5000/hour limit)
+- Use ~0.9 second delay between requests (default pacing: ~4000 req/hour, leaving 1000 spare)
+- Take approximately 3-4 hours for 2 months of mathlib4 data (~13,500 API requests)
+
+**Rate Limiting Options:**
+
+By default, botbaki paces requests at 0.9s intervals (~4000 req/hour) to stay well under GitHub's 5000 req/hour limit and leave spare quota for other work. You can adjust this:
+
+```bash
+# Faster sync (use more of your quota): 0.72s = ~5000 req/hour (no spare)
+./botbaki sync leanprover-community/mathlib4 --since 2025-10-16 --delay 0.72
+
+# More conservative (leave more spare): 1.2s = ~3000 req/hour (2000 spare)
+./botbaki sync leanprover-community/mathlib4 --since 2025-10-16 --delay 1.2
+```
 
 ### Incremental Updates
 
@@ -231,8 +243,8 @@ FROM (
 - **sync.py** - Sync logic (full and incremental)
 - **cli.py** - Command-line interface
 
-Design follows proven patterns from zulip-client:
-- Rate limiting: 100ms between requests, exponential backoff
+Design principles:
+- Rate limiting: 900ms between requests (~4000 req/hour, leaving spare quota), exponential backoff on errors
 - Idempotent inserts: `INSERT OR IGNORE` for safe re-syncing
 - FTS5 integration: Automatic full-text indexing via triggers
 - Checkpoint-based recovery: Resume from failures

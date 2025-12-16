@@ -9,7 +9,9 @@ import time
 from typing import Any, Dict, List, Optional, Union
 
 # Rate limiting configuration
-DEFAULT_REQUEST_DELAY = 0.1  # 100ms between requests (10 req/sec)
+# GitHub allows 5000 requests/hour for authenticated users
+# Default to 0.9s delay = ~4000 req/hour, leaving 1000 spare for other use
+DEFAULT_REQUEST_DELAY = 0.9  # 900ms between requests (~4000 req/hour)
 MAX_RETRIES = 5
 INITIAL_RETRY_DELAY = 1.0  # Start with 1 second on rate limit
 
@@ -37,7 +39,7 @@ class GitHubClient:
         Initialize GitHub client.
 
         Args:
-            request_delay: Minimum seconds between requests (default 0.1 = 100ms)
+            request_delay: Minimum seconds between requests (default 0.9s = ~4000 req/hour)
         """
         self._last_request_time: float = 0
         self.request_delay = request_delay
@@ -300,6 +302,23 @@ class GitHubClient:
     ) -> List[Dict[str, Any]]:
         """Get reviews for a pull request."""
         endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}/reviews'
+        params = {'per_page': str(per_page)}
+        return self.request(endpoint, params, paginate=True)
+
+    def get_pull_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        per_page: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Get files changed in a pull request with diffs.
+
+        Returns list of file objects with:
+        - filename, status, additions, deletions, changes, patch
+        """
+        endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}/files'
         params = {'per_page': str(per_page)}
         return self.request(endpoint, params, paginate=True)
 

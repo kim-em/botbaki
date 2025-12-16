@@ -22,6 +22,7 @@ def full_sync(
     full_name: str,
     since: Optional[datetime] = None,
     request_delay: float = 0.9,
+    force: bool = False,
     verbose: bool = True
 ) -> None:
     """
@@ -31,6 +32,7 @@ def full_sync(
         full_name: Repository in format 'owner/repo'
         since: Sync PRs updated since this date (default: 2 months ago)
         request_delay: Delay between API requests in seconds (default: 0.9s = ~4000 req/hour)
+        force: Force re-sync of all PRs even if they appear unchanged
         verbose: Print progress messages
 
     Raises:
@@ -88,23 +90,29 @@ def full_sync(
         # Filter to PRs updated since cutoff
         recent_prs = [pr for pr in prs if pr['updated_at'] >= since_str]
 
-        # Check if any PRs on this page are new or updated
-        changed_prs = []
-        for pr in recent_prs:
-            existing = database.get_pr_by_number(repo_id, pr['number'])
-            if not existing or existing['updated_at'] != pr['updated_at']:
-                changed_prs.append(pr)
+        # Check if any PRs on this page are new or updated (unless force=True)
+        if force:
+            # Force mode: sync all PRs regardless of whether they appear unchanged
+            changed_prs = recent_prs
+            if verbose:
+                print(f"got {len(prs)} PRs, {len(recent_prs)} since cutoff (force mode)")
+        else:
+            changed_prs = []
+            for pr in recent_prs:
+                existing = database.get_pr_by_number(repo_id, pr['number'])
+                if not existing or existing['updated_at'] != pr['updated_at']:
+                    changed_prs.append(pr)
 
-        if verbose:
-            if changed_prs:
-                print(f"got {len(prs)} PRs, {len(recent_prs)} since cutoff, {len(changed_prs)} new/updated")
-            else:
-                print(f"got {len(prs)} PRs, {len(recent_prs)} since cutoff, all unchanged")
+            if verbose:
+                if changed_prs:
+                    print(f"got {len(prs)} PRs, {len(recent_prs)} since cutoff, {len(changed_prs)} new/updated")
+                else:
+                    print(f"got {len(prs)} PRs, {len(recent_prs)} since cutoff, all unchanged")
 
         all_prs.extend(changed_prs)
 
-        # Early exit if we've seen a full page with no changes
-        if len(recent_prs) > 0 and len(changed_prs) == 0:
+        # Early exit if we've seen a full page with no changes (unless force=True)
+        if not force and len(recent_prs) > 0 and len(changed_prs) == 0:
             if verbose:
                 print("All recent PRs on this page are already up to date, stopping early")
             break
@@ -139,8 +147,8 @@ def full_sync(
         # Store PR metadata
         pr_id = database.store_or_update_pr(repo_id, pr)
 
-        # Fetch and store sub-resources
-        sync_pr_details(client, owner, repo, pr_id, pr_number, pr, verbose=False)
+        # Fetch and store sub-resources (force_fetch=True to ignore unreliable GitHub counts)
+        sync_pr_details(client, owner, repo, pr_id, pr_number, pr, verbose=False, force_fetch=True)
 
         # Update sync state
         database.update_pr_sync_state(

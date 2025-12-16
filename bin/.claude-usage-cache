@@ -1,0 +1,17 @@
+{
+  "session": {
+    "percent_used": 7,
+    "percent_time_elapsed": 20,
+    "resets": "11pm (Australia/Sydney)"
+  },
+  "week_all_models": {
+    "percent_used": 6,
+    "percent_time_elapsed": 5,
+    "resets": "Dec 23, 10am (Australia/Sydney)"
+  },
+  "week_sonnet_only": {
+    "percent_used": 3,
+    "percent_time_elapsed": 1,
+    "resets": "Dec 23, 5pm (Australia/Sydney)"
+  }
+}
