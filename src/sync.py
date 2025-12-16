@@ -21,6 +21,7 @@ def parse_repo_full_name(full_name: str) -> Tuple[str, str]:
 def full_sync(
     full_name: str,
     since: Optional[datetime] = None,
+    request_delay: float = 0.9,
     verbose: bool = True
 ) -> None:
     """
@@ -29,6 +30,7 @@ def full_sync(
     Args:
         full_name: Repository in format 'owner/repo'
         since: Sync PRs updated since this date (default: 2 months ago)
+        request_delay: Delay between API requests in seconds (default: 0.9s = ~4000 req/hour)
         verbose: Print progress messages
 
     Raises:
@@ -45,8 +47,9 @@ def full_sync(
 
     if verbose:
         print(f"Starting full sync for {full_name} (PRs updated since {since_str})")
+        print(f"Rate limit: {request_delay:.2f}s between requests (~{3600/request_delay:.0f} req/hour)")
 
-    client = GitHubClient()
+    client = GitHubClient(request_delay=request_delay)
 
     # Get or create repository in database
     repo_data = client.get_repository(owner, repo)
@@ -108,11 +111,25 @@ def full_sync(
     if verbose:
         print("\n=== Phase 2: Syncing PR details ===")
 
+    synced_count = 0
+    skipped_count = 0
+
     for i, pr in enumerate(all_prs, 1):
         pr_number = pr['number']
 
+        # Check if PR already exists and hasn't been updated
+        existing_pr = database.get_pr_by_number(repo_id, pr_number)
+
+        if existing_pr and existing_pr['updated_at'] == pr['updated_at']:
+            # PR hasn't changed since last sync - skip it
+            skipped_count += 1
+            if verbose:
+                print(f"[{i}/{len(all_prs)}] PR #{pr_number}: {pr['title'][:60]}... (unchanged, skipped)")
+            continue
+
         if verbose:
-            print(f"[{i}/{len(all_prs)}] PR #{pr_number}: {pr['title'][:60]}...")
+            status = "(updated)" if existing_pr else "(new)"
+            print(f"[{i}/{len(all_prs)}] PR #{pr_number}: {pr['title'][:60]}... {status}")
 
         # Store PR metadata
         pr_id = database.store_or_update_pr(repo_id, pr)
@@ -130,8 +147,10 @@ def full_sync(
             reviews=0  # We don't have a count for reviews
         )
 
+        synced_count += 1
+
         # Print progress every 10 PRs
-        if verbose and i % 10 == 0:
+        if verbose and synced_count % 10 == 0:
             client.print_rate_limit_status()
 
     # Update repository sync state
@@ -142,7 +161,7 @@ def full_sync(
     )
 
     if verbose:
-        print(f"\n=== Sync complete: {len(all_prs)} PRs ===")
+        print(f"\n=== Sync complete: {synced_count} PRs synced, {skipped_count} unchanged ===")
         client.print_rate_limit_status()
 
 
@@ -234,12 +253,13 @@ def sync_pr_details(
             sys.stderr.write(f"Error fetching reviews for PR #{pr_number}: {e}\n")
 
 
-def incremental_sync(full_name: str, verbose: bool = True) -> None:
+def incremental_sync(full_name: str, request_delay: float = 0.9, verbose: bool = True) -> None:
     """
     Perform incremental sync - update only changed PRs.
 
     Args:
         full_name: Repository in format 'owner/repo'
+        request_delay: Delay between API requests in seconds (default: 0.9s = ~4000 req/hour)
         verbose: Print progress messages
 
     Raises:
@@ -250,6 +270,7 @@ def incremental_sync(full_name: str, verbose: bool = True) -> None:
 
     if verbose:
         print(f"Starting incremental sync for {full_name}")
+        print(f"Rate limit: {request_delay:.2f}s between requests (~{3600/request_delay:.0f} req/hour)")
 
     # Get repository from database
     repo_row = database.get_repository_by_full_name(full_name)
@@ -271,7 +292,7 @@ def incremental_sync(full_name: str, verbose: bool = True) -> None:
     if verbose:
         print(f"Last sync: {last_sync}")
 
-    client = GitHubClient()
+    client = GitHubClient(request_delay=request_delay)
 
     if verbose:
         client.print_rate_limit_status()
@@ -392,21 +413,23 @@ def incremental_sync(full_name: str, verbose: bool = True) -> None:
         client.print_rate_limit_status()
 
 
-def sync_single_pr(full_name: str, pr_number: int, verbose: bool = True) -> None:
+def sync_single_pr(full_name: str, pr_number: int, request_delay: float = 0.9, verbose: bool = True) -> None:
     """
     Sync a single PR by number.
 
     Args:
         full_name: Repository in format 'owner/repo'
         pr_number: PR number to sync
+        request_delay: Delay between API requests in seconds (default: 0.9s = ~4000 req/hour)
         verbose: Print progress messages
     """
     owner, repo = parse_repo_full_name(full_name)
 
     if verbose:
         print(f"Syncing PR #{pr_number} from {full_name}")
+        print(f"Rate limit: {request_delay:.2f}s between requests (~{3600/request_delay:.0f} req/hour)")
 
-    client = GitHubClient()
+    client = GitHubClient(request_delay=request_delay)
 
     # Get repository
     repo_data = client.get_repository(owner, repo)
