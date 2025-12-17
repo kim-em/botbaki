@@ -1,28 +1,39 @@
-# Botbaki - GitHub PR Tracking Database
+# Botbaki - AI Code Review for GitHub PRs
 
-SQLite-based tool for tracking GitHub pull requests, comments, commits, and reviews.
+AI-powered code review tool for GitHub pull requests, with built-in PR tracking and search capabilities.
 
 ## Features
 
-- **Comprehensive PR tracking**: Store PRs, commits, inline code comments, general discussion, and reviews
-- **Full context**: Every inline review comment includes file path, line number, and diff hunk showing the actual code change
-- **Auto-sync**: `show` command automatically fetches PRs that aren't in the database yet
-- **Timeline view**: See all PR activity chronologically with full diff context for each code comment
-- **Full-text search**: Search across all comments using SQLite FTS5
+### AI Code Review
+- **Automated PR reviews**: Generate detailed code reviews using Claude (Opus or Sonnet)
+- **Mathlib4-aware**: Reviews check style, naming conventions, and mathlib-specific patterns
+- **Customizable prompts**: Date-based prompt templates with full diff and timeline context
+- **Smart caching**: Reviews are stored and reused for identical PR state + prompt combinations
+- **Flexible API**: Use Anthropic API or local Claude CLI with automatic quota management
+
+### PR Tracking & Search
+- **Comprehensive tracking**: Store PRs, commits, inline code comments, and reviews in SQLite
+- **Full-text search**: Search across all comments using FTS5
+- **Timeline view**: See all PR activity chronologically with diff context
 - **Analytics**: Statistics on authors, reviewers, comment patterns
-- **Incremental sync**: Efficiently update only changed PRs
-- **Zero dependencies**: Uses Python stdlib + `gh` CLI
+- **Auto-sync**: Commands automatically fetch PRs that aren't in the database yet
 
 ## Requirements
 
 - Python 3.7+
 - [GitHub CLI](https://cli.github.com) installed and authenticated (`gh auth login`)
+- For AI reviews (optional):
+  - Anthropic API key (`ANTHROPIC_API_KEY` env var), OR
+  - Local Claude CLI with quota
 
 ## Installation
 
 ```bash
 # Clone or navigate to botbaki directory
 cd /path/to/botbaki
+
+# Install dependencies (for AI reviews)
+pip install anthropic
 
 # Make sure gh CLI is authenticated
 gh auth login
@@ -32,6 +43,48 @@ gh auth login
 ```
 
 ## Usage
+
+### AI Code Review
+
+Generate an AI review of a pull request:
+
+```bash
+# Basic review (uses latest prompt, includes full context)
+./botbaki review leanprover-community/mathlib4 32904
+
+# Review only the diff, exclude timeline/comments
+./botbaki review leanprover-community/mathlib4 32904 --diff-only
+
+# Review at a specific commit
+./botbaki review leanprover-community/mathlib4 32904 --commit abc123
+
+# Use a specific prompt version
+./botbaki review leanprover-community/mathlib4 32904 --prompt-date 2025-12-15
+
+# Force regeneration (bypass cache)
+./botbaki review leanprover-community/mathlib4 32904 --force
+```
+
+**How it works:**
+1. Fetches PR diff and timeline from GitHub
+2. Loads the prompt template from `prompts/{repo}/YYYY-MM-DD.md`
+3. Substitutes diff, timeline, and PR metadata into the template
+4. Generates review using Claude (via Anthropic API or local CLI)
+5. Stores review in database for future reference
+6. Returns cached review on subsequent runs (unless `--force`)
+
+**API Methods:**
+- **Anthropic SDK** (recommended): Set `ANTHROPIC_API_KEY` environment variable
+- **Local Claude CLI**: Falls back automatically if no API key; uses quota checking
+
+**Customizing Prompts:**
+
+Edit or create prompt files in `prompts/{repo}/YYYY-MM-DD.md`:
+- Use `{diff}`, `{timeline}`, `{title}`, `{author}`, etc. as placeholders
+- Reference files in `prompts/{repo}/references/` for style guides
+- Latest prompt (by filename) is used by default
+
+### PR Tracking
 
 ### Initial Sync
 
@@ -164,11 +217,15 @@ Shows:
 
 The SQLite database (`data/github_prs.db`) contains:
 
+**AI Reviews:**
+- **pr_reviews** - Generated reviews with prompt hash, model used, and full review text
+
+**PR Tracking:**
 - **organizations** - GitHub organizations
 - **repositories** - Repositories within organizations
 - **pull_requests** - PR metadata with counts
 - **commits** - Commits on PR branches with full messages
-- **review_comments** - Inline code comments with file path, line number, and diff hunk (the actual code context)
+- **review_comments** - Inline code comments with file path, line number, and diff hunk
 - **issue_comments** - General PR discussion
 - **reviews** - Review submissions (approved, changes requested)
 - **pr_labels** - PR labels (many-to-many)
@@ -183,6 +240,21 @@ Access the database directly with `sqlite3`:
 
 ```bash
 sqlite3 data/github_prs.db
+```
+
+### View Stored Reviews
+
+```sql
+SELECT
+  pr_number,
+  substr(commit_sha, 1, 8) as commit,
+  reviewed_at,
+  model_used,
+  prompt_path,
+  substr(review_text, 1, 200) as preview
+FROM pr_reviews
+ORDER BY reviewed_at DESC
+LIMIT 10;
 ```
 
 ### Timeline for a PR
@@ -238,29 +310,45 @@ FROM (
 
 ## Architecture
 
+**AI Review System:**
+- **review.py** - Review generation with template substitution
+- **quota.py** - Claude CLI quota checking and management
+- **prompts/** - Template-based prompts with style guide references
+
+**PR Tracking:**
+- **sync.py** - PR sync logic (full and incremental)
 - **database.py** - SQLite operations, schema, CRUD
 - **github_client.py** - GitHub API client with rate limiting
-- **sync.py** - Sync logic (full and incremental)
 - **cli.py** - Command-line interface
 
 Design principles:
-- Rate limiting: 900ms between requests (~4000 req/hour, leaving spare quota), exponential backoff on errors
+- Review caching: Deduplication by PR + commit + prompt hash + flags
+- Template-based prompts: Reusable with `{diff}`, `{timeline}` placeholders
+- Dual API support: Anthropic SDK or local Claude CLI with quota checking
+- Rate limiting: 900ms between requests (~4000 req/hour), exponential backoff
 - Idempotent inserts: `INSERT OR IGNORE` for safe re-syncing
 - FTS5 integration: Automatic full-text indexing via triggers
-- Checkpoint-based recovery: Resume from failures
 
 ## Generalizing to Other Repositories
 
 While designed for mathlib4, botbaki works with any GitHub repository:
 
 ```bash
+# Review any repository PR (create custom prompts in prompts/{repo}/)
+./botbaki review owner/repo 123
+
 # Sync any repository
 ./botbaki sync owner/repo --since 2024-01-01
 
-# Works with multiple repos simultaneously (separate databases per repo)
-./botbaki sync leanprover/lean4 --since 2024-10-01
-./botbaki sync leanprover-community/batteries --since 2024-10-01
+# Works with multiple repos simultaneously
+./botbaki review leanprover/lean4 456
+./botbaki review leanprover-community/batteries 789
 ```
+
+To add a new repository:
+1. Create `prompts/{repo}/YYYY-MM-DD.md` with your review prompt template
+2. Optionally add reference files in `prompts/{repo}/references/`
+3. Run `./botbaki review {repo} {pr_number}`
 
 ## Troubleshooting
 
@@ -292,17 +380,30 @@ Project structure:
 ```
 botbaki/
 ├── src/
-│   ├── database.py      # Database operations
+│   ├── cli.py           # Command-line interface
+│   ├── review.py        # AI review generation
+│   ├── quota.py         # Claude quota checking
+│   ├── database.py      # SQLite operations
 │   ├── github_client.py # GitHub API client
-│   ├── sync.py         # Sync logic
-│   └── cli.py          # CLI interface
-├── data/               # SQLite database
-├── schema.sql         # Reference schema
-├── botbaki            # Launcher script
+│   └── sync.py          # Sync logic
+├── prompts/
+│   └── mathlib4/
+│       ├── YYYY-MM-DD.md        # Prompt templates
+│       └── references/
+│           ├── style.md         # Mathlib style guide
+│           └── naming.md        # Naming conventions
+├── bin/
+│   ├── claude-available-model   # Quota checker
+│   └── claude-usage             # Quota data fetcher
+├── data/                # SQLite database
+├── schema.sql          # Database schema
+├── botbaki             # Launcher script
 └── README.md
 ```
 
-No external dependencies required - uses Python stdlib only.
+Dependencies:
+- Python stdlib for core functionality
+- `anthropic` package for AI reviews (optional)
 
 ## License
 
