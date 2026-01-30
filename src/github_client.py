@@ -373,16 +373,17 @@ class GitHubClient:
 
         endpoint = f'/repos/{owner}/{repo}/issues/{issue_number}/comments'
 
-        # Use gh api with --method POST and --field for the body
+        # Use gh api with stdin for the body (avoids command-line length limits)
         cmd = [
             'gh', 'api', endpoint,
             '--method', 'POST',
-            '--field', f'body={body}'
+            '-f', 'body=@-'  # Read body from stdin
         ]
 
         try:
             result = subprocess.run(
                 cmd,
+                input=body,
                 capture_output=True,
                 text=True,
                 check=True,
