@@ -420,6 +420,21 @@ def cmd_rate_limit(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_daemon(args: argparse.Namespace) -> int:
+    """Handle daemon command."""
+    try:
+        from . import daemon
+        return daemon.run_daemon(
+            poll_interval=args.interval,
+            verbose=not args.quiet
+        )
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     """Handle review command."""
     try:
@@ -513,6 +528,13 @@ def main() -> int:
     review_parser.add_argument('--force', action='store_true',
                               help='Regenerate review even if one exists')
 
+    # daemon command
+    daemon_parser = subparsers.add_parser('daemon', help='Run polling daemon for @botbaki triggers')
+    daemon_parser.add_argument('--interval', type=int, default=120,
+                               help='Poll interval in seconds (default: 120)')
+    daemon_parser.add_argument('--quiet', '-q', action='store_true',
+                               help='Reduce output verbosity')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -534,6 +556,8 @@ def main() -> int:
         return cmd_rate_limit(args)
     elif args.command == 'review':
         return cmd_review(args)
+    elif args.command == 'daemon':
+        return cmd_daemon(args)
     else:
         parser.print_help()
         return 1

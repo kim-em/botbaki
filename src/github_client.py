@@ -344,3 +344,52 @@ class GitHubClient:
         except Exception as e:
             sys.stderr.write(f"Failed to get rate limit: {e}\n")
             sys.stderr.flush()
+
+    def post_issue_comment(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        body: str
+    ) -> Dict[str, Any]:
+        """
+        Post a comment on an issue or PR.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            issue_number: Issue/PR number
+            body: Comment body (markdown)
+
+        Returns:
+            Created comment object with 'id', 'html_url', etc.
+        """
+        # Ensure minimum delay between requests
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self.request_delay:
+            time.sleep(self.request_delay - elapsed)
+
+        self._last_request_time = time.time()
+
+        endpoint = f'/repos/{owner}/{repo}/issues/{issue_number}/comments'
+
+        # Use gh api with --method POST and --field for the body
+        cmd = [
+            'gh', 'api', endpoint,
+            '--method', 'POST',
+            '--field', f'body={body}'
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30
+            )
+            return json.loads(result.stdout)
+        except subprocess.CalledProcessError as e:
+            raise GitHubError(f"Failed to post comment: {e.stderr}")
+        except json.JSONDecodeError as e:
+            raise GitHubError(f"Invalid JSON response: {e}")

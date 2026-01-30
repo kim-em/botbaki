@@ -1,0 +1,30 @@
+[Unit]
+Description=Botbaki GitHub PR Review Bot
+After=network.target
+
+[Service]
+Type=simple
+User=kim
+WorkingDirectory=/home/kim/projects/botbaki
+ExecStart=/home/kim/projects/botbaki/botbaki daemon
+Restart=always
+RestartSec=30
+
+# Environment
+Environment=ANTHROPIC_API_KEY=
+# Or use EnvironmentFile for secrets:
+# EnvironmentFile=/home/kim/.config/botbaki/env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=botbaki
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/kim/projects/botbaki/data
+
+[Install]
+WantedBy=multi-user.target

@@ -268,3 +268,19 @@ CREATE TABLE IF NOT EXISTS pr_reviews (
 CREATE INDEX IF NOT EXISTS idx_pr_reviews_pr ON pr_reviews(pr_id);
 CREATE INDEX IF NOT EXISTS idx_pr_reviews_commit ON pr_reviews(commit_sha);
 CREATE INDEX IF NOT EXISTS idx_pr_reviews_timestamp ON pr_reviews(reviewed_at);
+
+-- Processed trigger comments (to avoid responding twice)
+CREATE TABLE IF NOT EXISTS processed_triggers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  comment_id INTEGER UNIQUE NOT NULL,  -- GitHub comment ID
+  pr_id INTEGER NOT NULL REFERENCES pull_requests(id),
+  command TEXT NOT NULL,               -- e.g., "review", "review --diff-only"
+  triggered_by TEXT NOT NULL,          -- GitHub login of user who triggered
+  processed_at TEXT NOT NULL,
+  review_id INTEGER REFERENCES pr_reviews(id),
+  response_comment_id INTEGER,         -- GitHub comment ID of our response
+  error_message TEXT                   -- If processing failed
+);
+
+CREATE INDEX IF NOT EXISTS idx_processed_triggers_comment ON processed_triggers(comment_id);
+CREATE INDEX IF NOT EXISTS idx_processed_triggers_pr ON processed_triggers(pr_id);
