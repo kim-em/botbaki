@@ -29,6 +29,21 @@ Botbaki is a CLI tool that:
 - Anyone can trigger reviews
 - Uses `gh` CLI for GitHub API access
 
+### Deployment (v0.2.1)
+
+Deployed to `chonk.lean-fro.org` as a systemd service:
+- Service: `botbaki.service`
+- Logs: `journalctl -u botbaki -f`
+- Config: `~/.config/botbaki/env` (contains `ANTHROPIC_API_KEY`)
+- Data: `~/projects/botbaki/data/botbaki.db`
+
+**Management:**
+```bash
+sudo systemctl status botbaki   # Check status
+sudo systemctl restart botbaki  # Restart
+sudo journalctl -u botbaki -f   # Follow logs
+```
+
 ## Next Steps
 
 ### 1. Inline Review Comments
