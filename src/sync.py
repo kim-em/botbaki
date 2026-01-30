@@ -111,12 +111,6 @@ def full_sync(
 
         all_prs.extend(changed_prs)
 
-        # Early exit if we've seen a full page with no changes (unless force=True)
-        if not force and len(recent_prs) > 0 and len(changed_prs) == 0:
-            if verbose:
-                print("All recent PRs on this page are already up to date, stopping early")
-            break
-
         # Stop if we've gone past our date threshold
         if len(recent_prs) < len(prs):
             if verbose:
@@ -385,13 +379,11 @@ def incremental_sync(full_name: str, request_delay: float = 0.9, verbose: bool =
             if verbose:
                 print("  (New PR)")
         else:
-            # Check if counts changed
-            if (pr.get('commits', 0) != existing_pr['commits_count'] or
-                pr.get('review_comments', 0) != existing_pr['review_comments_count'] or
-                pr.get('comments', 0) != existing_pr['comments_count']):
-                needs_update = True
-                if verbose:
-                    print("  (Counts changed)")
+            # PR was found because updated_at changed, so always fetch details
+            # (GitHub's comment counts in PR list can be stale)
+            needs_update = True
+            if verbose:
+                print("  (Updated)")
 
         if needs_update:
             sync_pr_details(client, owner, repo, pr_id, pr_number, pr, verbose=verbose)
