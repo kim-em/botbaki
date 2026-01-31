@@ -170,7 +170,7 @@ class Daemon:
                 ic.pr_id,
                 ic.author_login,
                 ic.body,
-                ic.created_at,
+                ic.created_at as created_at,
                 pr.pr_number,
                 'issue' as comment_type,
                 NULL as path,
@@ -190,7 +190,7 @@ class Daemon:
                 rc.pr_id,
                 rc.author_login,
                 rc.body,
-                rc.created_at,
+                rc.created_at as created_at,
                 pr.pr_number,
                 'review' as comment_type,
                 rc.path,
@@ -202,7 +202,7 @@ class Daemon:
               AND LOWER(rc.body) LIKE '%@botbaki%'
               AND pt.id IS NULL
 
-            ORDER BY created_at ASC
+            ORDER BY 6 ASC
         """
 
         cursor = db.execute(query, (repo_id, repo_id))
