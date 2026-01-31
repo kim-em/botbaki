@@ -734,6 +734,24 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_analyze_feedback(args: argparse.Namespace) -> int:
+    """Handle analyze-feedback command."""
+    try:
+        from . import analysis
+        return analysis.analyze_feedback(
+            since=args.since,
+            prompt_path=args.prompt,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            force=args.force
+        )
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -802,6 +820,18 @@ def main() -> int:
     feedback_report_parser = subparsers.add_parser('feedback-report', help='Show collected feedback on reviews')
     feedback_report_parser.add_argument('--since', help='Only show feedback since this date (YYYY-MM-DD)')
 
+    # analyze-feedback command
+    analyze_parser = subparsers.add_parser('analyze-feedback',
+                                           help='Analyze feedback and generate improved prompt')
+    analyze_parser.add_argument('--since', help='Only analyze feedback since this date (YYYY-MM-DD)')
+    analyze_parser.add_argument('--prompt', help='Override prompt template to improve (default: latest)')
+    analyze_parser.add_argument('--dry-run', action='store_true',
+                               help='Show what would be analyzed without calling API')
+    analyze_parser.add_argument('--verbose', '-v', action='store_true',
+                               help='Show progress during analysis')
+    analyze_parser.add_argument('--force', action='store_true',
+                               help='Overwrite output even if it has uncommitted git changes')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -827,6 +857,8 @@ def main() -> int:
         return cmd_daemon(args)
     elif args.command == 'feedback-report':
         return cmd_feedback_report(args)
+    elif args.command == 'analyze-feedback':
+        return cmd_analyze_feedback(args)
     else:
         parser.print_help()
         return 1
