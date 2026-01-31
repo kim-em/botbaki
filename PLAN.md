@@ -44,6 +44,43 @@ sudo systemctl restart botbaki  # Restart
 sudo journalctl -u botbaki -f   # Follow logs
 ```
 
+## Bugs to Fix (2026-01-30)
+
+Issues discovered during first live test on PR #34594.
+
+### Critical
+
+1. **`-f body=@-` doesn't work for stdin** - Posts literal `@-` instead of reading stdin content. Need to use `-F body=@-` (capital F) or pipe JSON to `--input`.
+
+2. **Help text triggers self-responses** - The help table contains `` `@botbaki review` `` which triggers a review. Need to:
+   - Ignore mentions inside code blocks/backticks
+   - Ignore mentions in tables
+   - Or ignore comments from botbaki's own responses (track response_comment_id)
+
+3. **Duplicate triggers processed** - Same PR got multiple reviews due to #2. Need deduplication per PR+commit.
+
+### UX Issues
+
+4. **Error messages include full review text** - When posting fails, the "Sorry, error..." message includes the entire review that failed to post. Should truncate or omit.
+
+5. **Multiple error comments posted** - Error handling posted "Sorry..." twice for the same failure. Need to track failures better.
+
+6. **No bot account** - Botbaki posts as `kim-em`, confusing for other users. Consider:
+   - Creating a dedicated GitHub bot account
+   - Or clearly prefixing messages with "[Botbaki]"
+
+### Missing Features
+
+7. **No trigger deduplication** - Multiple `@botbaki review` comments on same commit should only generate one review.
+
+8. **No response threading** - Should reply to the triggering comment, not just post a new top-level comment.
+
+### Review Quality
+
+9. **Copyright year hallucination** - Review said "2026 appears incorrect (should be 2025)" but we're in 2026. Need to pass current date to prompt or fix prompt to not make assumptions.
+
+10. **"Missing module keyword" wrong** - Mathlib doesn't use `module` keyword. This is bad Lean 4 advice. Need better mathlib-specific prompting.
+
 ## Next Steps
 
 ### 1. Inline Review Comments
