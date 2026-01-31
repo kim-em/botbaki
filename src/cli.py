@@ -508,9 +508,16 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
         except Exception:
             has_new_columns = False
 
+        # Build WHERE clause for --since filter
+        since_filter = ""
+        params = []
+        if args.since:
+            since_filter = "WHERE rf.created_at >= ?"
+            params.append(args.since)
+
         # Query all feedback with review context
         if has_new_columns:
-            query = """
+            query = f"""
                 SELECT
                     rf.id,
                     rf.pr_number,
@@ -526,10 +533,11 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
                     rf.line
                 FROM review_feedback rf
                 LEFT JOIN pr_reviews pr ON rf.review_id = pr.id
+                {since_filter}
                 ORDER BY rf.created_at DESC
             """
         else:
-            query = """
+            query = f"""
                 SELECT
                     rf.id,
                     rf.pr_number,
@@ -545,9 +553,10 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
                     NULL as line
                 FROM review_feedback rf
                 LEFT JOIN pr_reviews pr ON rf.review_id = pr.id
+                {since_filter}
                 ORDER BY rf.created_at DESC
             """
-        cursor = db.execute(query)
+        cursor = db.execute(query, params)
         rows = cursor.fetchall()
 
         if not rows:
@@ -591,6 +600,7 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
             commit = row['commit_sha'][:8] if row['commit_sha'] else 'N/A'
             model = row['model_used'] or 'N/A'
             prompt = row['prompt_path'] or 'N/A'
+            review_text = row['review_text'] or ''
             comment_type = row['comment_type'] or 'issue'
             path = row['path']
             line = row['line']
@@ -604,6 +614,18 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
             if prompt != 'N/A':
                 prompt_name = prompt.split('/')[-1] if '/' in prompt else prompt
                 print(f"Prompt: {prompt_name}")
+
+            # Show the review that this feedback is about
+            if review_text:
+                print()
+                print("REVIEW:")
+                print()
+                # Indent the review text for clarity
+                for review_line in review_text.split('\n'):
+                    print(f"  {review_line}")
+
+            print()
+            print("FEEDBACK:")
             print()
             print(text)
             print()
@@ -777,7 +799,8 @@ def main() -> int:
                                help='Reduce output verbosity')
 
     # feedback-report command
-    subparsers.add_parser('feedback-report', help='Show collected feedback on reviews')
+    feedback_report_parser = subparsers.add_parser('feedback-report', help='Show collected feedback on reviews')
+    feedback_report_parser.add_argument('--since', help='Only show feedback since this date (YYYY-MM-DD)')
 
     args = parser.parse_args()
 
