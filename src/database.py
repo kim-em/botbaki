@@ -185,6 +185,16 @@ def get_pr_by_number(repo_id: int, pr_number: int) -> Optional[sqlite3.Row]:
     return cursor.fetchone()
 
 
+def get_pr_by_id(pr_id: int) -> Optional[sqlite3.Row]:
+    """Get PR by its database ID."""
+    db = get_database()
+    cursor = db.execute(
+        "SELECT * FROM pull_requests WHERE id = ?",
+        (pr_id,)
+    )
+    return cursor.fetchone()
+
+
 # Commit operations
 
 def store_commit(pr_id: int, commit_data: Dict[str, Any]) -> None:
