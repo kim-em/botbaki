@@ -284,3 +284,20 @@ CREATE TABLE IF NOT EXISTS processed_triggers (
 
 CREATE INDEX IF NOT EXISTS idx_processed_triggers_comment ON processed_triggers(comment_id);
 CREATE INDEX IF NOT EXISTS idx_processed_triggers_pr ON processed_triggers(pr_id);
+
+-- User feedback on AI-generated reviews
+CREATE TABLE IF NOT EXISTS review_feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  review_id INTEGER REFERENCES pr_reviews(id),  -- May be NULL if feedback not tied to specific review
+  pr_id INTEGER NOT NULL REFERENCES pull_requests(id),
+  pr_number INTEGER NOT NULL,
+  comment_id INTEGER UNIQUE NOT NULL,           -- GitHub comment ID containing feedback
+  feedback_text TEXT NOT NULL,                  -- Full feedback text
+  github_login TEXT NOT NULL,                   -- Who gave the feedback
+  created_at TEXT NOT NULL,                     -- When the feedback was posted
+  processed_at TEXT NOT NULL                    -- When we stored it
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_feedback_review ON review_feedback(review_id);
+CREATE INDEX IF NOT EXISTS idx_review_feedback_pr ON review_feedback(pr_id);
+CREATE INDEX IF NOT EXISTS idx_review_feedback_user ON review_feedback(github_login);
