@@ -492,6 +492,150 @@ def cmd_review(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_feedback_report(args: argparse.Namespace) -> int:
+    """Handle feedback-report command."""
+    import re
+    from collections import Counter
+
+    try:
+        db = database.get_database()
+
+        # Query all feedback with review context
+        query = """
+            SELECT
+                rf.id,
+                rf.pr_number,
+                rf.github_login,
+                rf.feedback_text,
+                rf.created_at,
+                pr.commit_sha,
+                pr.model_used,
+                pr.prompt_path,
+                pr.review_text
+            FROM review_feedback rf
+            LEFT JOIN pr_reviews pr ON rf.review_id = pr.id
+            ORDER BY rf.created_at DESC
+        """
+        cursor = db.execute(query)
+        rows = cursor.fetchall()
+
+        if not rows:
+            print("No feedback collected yet.")
+            return 0
+
+        # Parse feedback for patterns
+        helpful_pattern = re.compile(r'(issue|suggestion)\s*(\d+)\s*(?:was\s+)?(helpful|great|good|useful|valuable)', re.I)
+        unhelpful_pattern = re.compile(r'(issue|suggestion)\s*(\d+)\s*(?:was\s+)?(unhelpful|wrong|bad|incorrect|useless)', re.I)
+        partial_pattern = re.compile(r'(issue|suggestion)\s*(\d+)\s*(?:was\s+)?(fine|ok|reasonable|interesting)', re.I)
+
+        helpful_items = []
+        unhelpful_items = []
+        partial_items = []
+        total_issues_mentioned = 0
+        total_suggestions_mentioned = 0
+
+        print("=" * 80)
+        print("FEEDBACK REPORT")
+        print("=" * 80)
+        print(f"\nTotal feedback entries: {len(rows)}")
+        print()
+
+        for row in rows:
+            fb_id = row['id']
+            pr_number = row['pr_number']
+            author = row['github_login']
+            text = row['feedback_text']
+            created = row['created_at'][:10] if row['created_at'] else 'N/A'
+            commit = row['commit_sha'][:8] if row['commit_sha'] else 'N/A'
+            model = row['model_used'] or 'N/A'
+            prompt = row['prompt_path'] or 'N/A'
+
+            print("-" * 80)
+            print(f"PR #{pr_number} | {created} | by @{author}")
+            print(f"Review: commit={commit}, model={model}")
+            if prompt != 'N/A':
+                prompt_name = prompt.split('/')[-1] if '/' in prompt else prompt
+                print(f"Prompt: {prompt_name}")
+            print()
+            print(text)
+            print()
+
+            # Extract patterns
+            for match in helpful_pattern.finditer(text):
+                item_type = match.group(1).lower()
+                item_num = match.group(2)
+                helpful_items.append(f"{item_type} {item_num}")
+                if item_type == 'issue':
+                    total_issues_mentioned += 1
+                else:
+                    total_suggestions_mentioned += 1
+
+            for match in unhelpful_pattern.finditer(text):
+                item_type = match.group(1).lower()
+                item_num = match.group(2)
+                unhelpful_items.append(f"{item_type} {item_num}")
+                if item_type == 'issue':
+                    total_issues_mentioned += 1
+                else:
+                    total_suggestions_mentioned += 1
+
+            for match in partial_pattern.finditer(text):
+                item_type = match.group(1).lower()
+                item_num = match.group(2)
+                partial_items.append(f"{item_type} {item_num}")
+                if item_type == 'issue':
+                    total_issues_mentioned += 1
+                else:
+                    total_suggestions_mentioned += 1
+
+        # Summary
+        print("=" * 80)
+        print("SUMMARY")
+        print("=" * 80)
+
+        total_mentioned = len(helpful_items) + len(unhelpful_items) + len(partial_items)
+        if total_mentioned > 0:
+            print(f"\nItems mentioned in feedback: {total_mentioned}")
+            print(f"  Issues mentioned: {total_issues_mentioned}")
+            print(f"  Suggestions mentioned: {total_suggestions_mentioned}")
+            print()
+
+            if helpful_items:
+                print(f"Helpful ({len(helpful_items)}):")
+                for item, count in Counter(helpful_items).most_common():
+                    print(f"  - {item}" + (f" (x{count})" if count > 1 else ""))
+
+            if partial_items:
+                print(f"\nPartially helpful ({len(partial_items)}):")
+                for item, count in Counter(partial_items).most_common():
+                    print(f"  - {item}" + (f" (x{count})" if count > 1 else ""))
+
+            if unhelpful_items:
+                print(f"\nUnhelpful ({len(unhelpful_items)}):")
+                for item, count in Counter(unhelpful_items).most_common():
+                    print(f"  - {item}" + (f" (x{count})" if count > 1 else ""))
+
+            # Calculate helpfulness ratio
+            if helpful_items or unhelpful_items:
+                helpful_count = len(helpful_items)
+                unhelpful_count = len(unhelpful_items)
+                total = helpful_count + unhelpful_count
+                ratio = helpful_count / total if total > 0 else 0
+                print(f"\nHelpfulness ratio: {helpful_count}/{total} ({ratio:.0%})")
+        else:
+            print("\nNo structured feedback patterns detected.")
+            print("(Looking for patterns like 'Issue 1 was helpful', 'Suggestion 2 was wrong')")
+
+        print()
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -554,6 +698,9 @@ def main() -> int:
     daemon_parser.add_argument('--quiet', '-q', action='store_true',
                                help='Reduce output verbosity')
 
+    # feedback-report command
+    subparsers.add_parser('feedback-report', help='Show collected feedback on reviews')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -577,6 +724,8 @@ def main() -> int:
         return cmd_review(args)
     elif args.command == 'daemon':
         return cmd_daemon(args)
+    elif args.command == 'feedback-report':
+        return cmd_feedback_report(args)
     else:
         parser.print_help()
         return 1
