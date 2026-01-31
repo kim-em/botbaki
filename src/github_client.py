@@ -489,6 +489,76 @@ class GitHubClient:
 
         raise GitHubError("Unexpected error in request retry loop")
 
+    def get_repo_issue_comments_since(
+        self,
+        owner: str,
+        repo: str,
+        since: str,
+        per_page: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Get all issue comments in a repo since a given timestamp.
+
+        This is more efficient than checking each PR individually.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            since: ISO 8601 timestamp (e.g., "2026-01-31T10:00:00Z")
+            per_page: Results per page
+
+        Returns:
+            List of comment dicts with issue_url to identify the PR
+        """
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                # Use the raw API since PyGithub doesn't expose this endpoint well
+                # GET /repos/{owner}/{repo}/issues/comments?since=TIMESTAMP&sort=updated&direction=desc
+                headers, data = self._github._Github__requester.requestJsonAndCheck(
+                    "GET",
+                    f"/repos/{owner}/{repo}/issues/comments",
+                    parameters={
+                        'since': since,
+                        'sort': 'updated',
+                        'direction': 'desc',
+                        'per_page': per_page
+                    }
+                )
+
+                results = []
+                for c in data:
+                    # Extract PR number from issue_url
+                    # issue_url looks like: https://api.github.com/repos/owner/repo/issues/123
+                    issue_url = c.get('issue_url', '')
+                    pr_number = None
+                    if '/issues/' in issue_url:
+                        try:
+                            pr_number = int(issue_url.split('/issues/')[-1])
+                        except ValueError:
+                            pass
+
+                    results.append({
+                        'id': c.get('id'),
+                        'node_id': c.get('node_id', ''),
+                        'user': c.get('user', {}),
+                        'body': c.get('body', ''),
+                        'created_at': c.get('created_at', ''),
+                        'updated_at': c.get('updated_at', ''),
+                        'html_url': c.get('html_url', ''),
+                        'issue_url': issue_url,
+                        'pr_number': pr_number
+                    })
+
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
+
     def create_pull_request_review(
         self,
         owner: str,

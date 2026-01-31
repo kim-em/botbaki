@@ -78,13 +78,25 @@ class Daemon:
         """Single poll cycle: sync and process triggers."""
         self.log("Starting poll cycle")
 
-        # Sync recent activity
-        self.log("Syncing recent PRs...")
-        try:
-            sync.incremental_sync(REPOSITORY, request_delay=0.5, verbose=False)
-        except Exception as e:
-            self.log(f"Sync failed: {e}")
-            return
+        # First, efficiently check for new @botbaki mentions
+        # This is faster than full incremental sync
+        prs_to_sync = self._find_prs_with_new_mentions()
+
+        if prs_to_sync:
+            self.log(f"Found {len(prs_to_sync)} PRs with new @botbaki mentions")
+            for pr_num in prs_to_sync:
+                try:
+                    sync.sync_single_pr(REPOSITORY, pr_num, request_delay=0.5, verbose=False)
+                except Exception as e:
+                    self.log(f"Failed to sync PR #{pr_num}: {e}")
+        else:
+            # Fallback: do a lighter incremental sync
+            self.log("No new mentions, running incremental sync...")
+            try:
+                sync.incremental_sync(REPOSITORY, request_delay=0.5, verbose=False)
+            except Exception as e:
+                self.log(f"Sync failed: {e}")
+                return
 
         # Find and process triggers
         triggers = self._find_unprocessed_triggers()
@@ -96,6 +108,41 @@ class Daemon:
             self._process_trigger(trigger)
 
         self.log("Poll cycle complete")
+
+    def _find_prs_with_new_mentions(self) -> List[int]:
+        """Find PRs that have new @botbaki mentions since last sync.
+
+        Uses the efficient repo-wide issue comments endpoint.
+        Returns list of PR numbers that need syncing.
+        """
+        # Get last sync time
+        repo_row = database.get_repository_by_full_name(REPOSITORY)
+        if not repo_row:
+            return []
+
+        last_sync = database.get_last_sync_time(repo_row['id'])
+        if not last_sync:
+            return []
+
+        try:
+            # Fetch comments updated since last sync
+            comments = self.client.get_repo_issue_comments_since(
+                self.owner, self.repo, since=last_sync
+            )
+
+            # Find PRs with @botbaki mentions
+            prs_with_mentions = set()
+            for c in comments:
+                body = c.get('body', '')
+                pr_number = c.get('pr_number')
+                if pr_number and '@botbaki' in body.lower():
+                    prs_with_mentions.add(pr_number)
+
+            return list(prs_with_mentions)
+
+        except Exception as e:
+            self.log(f"Failed to fetch recent comments: {e}")
+            return []
 
     def _find_unprocessed_triggers(self) -> List[dict]:
         """Find @botbaki comments that haven't been processed yet."""
