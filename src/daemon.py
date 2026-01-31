@@ -55,7 +55,7 @@ class Daemon:
 
     def run(self) -> None:
         """Main daemon loop."""
-        self.log(f"Starting botbaki daemon for {REPOSITORY}")
+        self.log(f"Starting botbaki daemon for {self.repository}")
         self.log(f"Poll interval: {self.poll_interval}s")
 
         while self.running:
@@ -88,14 +88,14 @@ class Daemon:
             self.log(f"Found {len(prs_to_sync)} PRs with new @botbaki mentions")
             for pr_num in prs_to_sync:
                 try:
-                    sync.sync_single_pr(REPOSITORY, pr_num, request_delay=0.5, verbose=False)
+                    sync.sync_single_pr(self.repository, pr_num, request_delay=0.5, verbose=False)
                 except Exception as e:
                     self.log(f"Failed to sync PR #{pr_num}: {e}")
         else:
             # Fallback: do a lighter incremental sync
             self.log("No new mentions, running incremental sync...")
             try:
-                sync.incremental_sync(REPOSITORY, request_delay=0.5, verbose=False)
+                sync.incremental_sync(self.repository, request_delay=0.5, verbose=False)
             except Exception as e:
                 self.log(f"Sync failed: {e}")
                 return
@@ -118,7 +118,7 @@ class Daemon:
         Returns list of PR numbers that need syncing.
         """
         # Get last sync time
-        repo_row = database.get_repository_by_full_name(REPOSITORY)
+        repo_row = database.get_repository_by_full_name(self.repository)
         if not repo_row:
             return []
 
@@ -155,7 +155,7 @@ class Daemon:
         db = database.get_database()
 
         # Get repository
-        repo_row = database.get_repository_by_full_name(REPOSITORY)
+        repo_row = database.get_repository_by_full_name(self.repository)
         if not repo_row:
             return []
 
@@ -323,7 +323,7 @@ class Daemon:
         try:
             # Generate review
             result = review_module.generate_pr_review(
-                full_name=REPOSITORY,
+                full_name=self.repository,
                 pr_number=pr_number,
                 include_timeline=not diff_only,
                 force=False,  # Use cached if available
