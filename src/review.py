@@ -123,6 +123,7 @@ def generate_review_via_anthropic_sdk(
         author=pr_data['author'],
         commit_sha=pr_data['commit_sha'],
         state=pr_data['state'],
+        current_date=pr_data['current_date'],
         diff=diff,
         timeline=timeline
     )
@@ -164,6 +165,7 @@ def generate_review_via_claude_cli(
         author=pr_data['author'],
         commit_sha=pr_data['commit_sha'],
         state=pr_data['state'],
+        current_date=pr_data['current_date'],
         diff=diff,
         timeline=timeline
     )
