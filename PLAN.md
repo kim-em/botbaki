@@ -2,32 +2,60 @@
 
 ## Current State
 
-Botbaki is a CLI tool that:
+Botbaki is a GitHub App that:
 - Syncs PR data from GitHub to SQLite
-- Generates AI reviews using Claude (Sonnet or Opus)
+- Generates AI reviews using Claude (Sonnet) with inline comments
 - Caches reviews to avoid regenerating for the same commit/prompt
-- **NEW:** Runs as a polling daemon watching for `@botbaki` triggers
+- Runs as a polling daemon watching for `@botbaki` triggers
+- Collects user feedback on review quality
 
-**Cost per review:** ~$0.05 (Sonnet) or ~$0.20 (Opus)
+**Identity:** `botbaki-review[bot]` (GitHub App)
+**Cost per review:** ~$0.05 (Sonnet)
 
 ## Completed
+
+### Inline Review Comments (v0.3)
+
+- Reviews posted as GitHub PR reviews with inline comments on specific lines
+- Uses Claude's structured output API with Pydantic models
+- Line-annotated diffs help Claude reference correct line numbers
+- Validation filters out invalid line references before posting
+- `--single` flag available for legacy single-comment mode
+
+### GitHub App Authentication (v0.3)
+
+- Converted from `gh` CLI to PyGithub with GitHub App auth
+- Bot identity: `botbaki-review[bot]` (not personal account)
+- Higher rate limits, no abuse detection issues
+- Credentials in `~/.config/botbaki/`:
+  - `github-app-id`
+  - `github-app-key.pem`
+  - `github-installation-id`
+
+### Efficient Comment Polling (v0.3)
+
+- Polls repo-wide issue comments endpoint for @botbaki mentions
+- Only syncs PRs that have new mentions (not all updated PRs)
+- Falls back to incremental sync when no mentions found
+- Fixes issue where comments don't update PR's `updated_at`
+
+### Feedback Collection (v0.2)
+
+- `@botbaki feedback <text>` stores feedback linked to most recent review
+- Feedback stored in `review_feedback` table
+- Bot acknowledges with "Thanks for the feedback!"
 
 ### Polling Daemon (v0.2)
 
 - `botbaki daemon` command runs a polling loop
 - Checks for new `@botbaki` comments every 2 minutes
 - Supported commands:
-  - `@botbaki review` - generate review for current PR
+  - `@botbaki review` - generate review with inline comments
+  - `@botbaki review --single` - post as single comment (no inline)
   - `@botbaki review --diff-only` - review without timeline context
+  - `@botbaki feedback <text>` - provide feedback on last review
   - `@botbaki help` - show available commands
-- Posts reviews as issue comments
 - Tracks processed triggers to avoid duplicate responses
-- Systemd service file for deployment (`service/botbaki.service`)
-
-**Configuration:**
-- Hardcoded to `leanprover-community/mathlib4`
-- Anyone can trigger reviews
-- Uses `gh` CLI for GitHub API access
 
 ### Deployment (v0.2.1)
 
@@ -35,6 +63,7 @@ Deployed to `chonk.lean-fro.org` as a systemd service:
 - Service: `botbaki.service`
 - Logs: `journalctl -u botbaki -f`
 - Config: `~/.config/botbaki/env` (contains `ANTHROPIC_API_KEY`)
+- GitHub App credentials: `~/.config/botbaki/github-app-*`
 - Data: `~/projects/botbaki/data/botbaki.db`
 
 **Management:**
@@ -47,29 +76,18 @@ sudo journalctl -u botbaki -f   # Follow logs
 ## Known Limitations
 
 - **No response threading**: Reviews post as new top-level comments rather than replies to the trigger comment.
+- **Polling delay**: 2-minute poll interval (webhooks would be real-time)
 
 ## Next Steps
 
-### 1. Inline Review Comments
-
-Currently reviews are posted as a single issue comment. Future improvement:
-- Parse review output to identify file-specific suggestions
-- Post as a GitHub PR review with inline comments on specific lines
-- Benefits: easier for authors to see suggestions in context
-
-**Implementation notes:**
-- Use `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` API
-- Include `comments` array with `path`, `line`, `body` for each inline comment
-- Need to map suggestions to actual diff lines (tricky with context)
-
-### 2. Webhooks (Future)
+### 1. Webhooks
 
 For real-time response instead of 2-minute polling delay:
 - Requires public endpoint (Cloudflare Tunnel, ngrok, or cloud hosting)
 - Subscribe to `issue_comment` webhook events
 - Keep polling as fallback for missed webhooks
 
-### 3. Opt-in System for PR Authors
+### 2. Opt-in System for PR Authors
 
 Proactively offer reviews to PR authors who want them.
 
@@ -87,9 +105,9 @@ Proactively offer reviews to PR authors who want them.
 - For opted-in users: automatically review new PRs and force-pushes
 - Respect rate limits (max N reviews per PR? per day?)
 
-### 4. Feedback Collection
+### 3. Advanced Feedback Collection
 
-Allow users to rate botbaki's suggestions for prompt improvement.
+Improve feedback with per-suggestion tracking:
 
 **Inline feedback mechanism:**
 - Each suggestion in the review gets a unique ID
@@ -98,22 +116,7 @@ Allow users to rate botbaki's suggestions for prompt improvement.
   - `@botbaki +1 <id>` / `@botbaki -1 <id>` for specific suggestions
   - `@botbaki feedback <id> <text>` for detailed feedback
 
-**Database schema:**
-```sql
-CREATE TABLE review_feedback (
-    id INTEGER PRIMARY KEY,
-    review_id INTEGER REFERENCES pr_reviews(id),
-    suggestion_id TEXT,           -- e.g., "issue-1", "suggestion-3"
-    suggestion_text TEXT,         -- the actual suggestion text
-    feedback_type TEXT,           -- 'positive', 'negative', 'detailed'
-    feedback_text TEXT,           -- user's detailed feedback if any
-    github_login TEXT,
-    created_at TEXT
-);
-```
-
 **Feedback review process:**
-- Periodic export of feedback for human review
 - `botbaki feedback-report` command to summarize:
   - Most upvoted/downvoted suggestion patterns
   - Common complaints
@@ -121,25 +124,18 @@ CREATE TABLE review_feedback (
 - Update prompts/templates based on patterns
 - Track prompt versions and measure improvement over time
 
-## Architecture Sketch
+## Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────┐
-│  GitHub         │────▶│  Webhook     │
-│  (PRs/Comments) │     │  Receiver    │
+│  GitHub         │────▶│  Polling     │
+│  (PRs/Comments) │     │  Daemon      │
 └─────────────────┘     └──────┬───────┘
                                │
                                ▼
                         ┌──────────────┐
-                        │  Event       │
-                        │  Queue       │
-                        └──────┬───────┘
-                               │
-                               ▼
-                        ┌──────────────┐
-                        │  Worker      │
-                        │  (reviews,   │
-                        │   feedback)  │
+                        │  Trigger     │
+                        │  Processing  │
                         └──────┬───────┘
                                │
               ┌────────────────┼────────────────┐
@@ -148,11 +144,12 @@ CREATE TABLE review_feedback (
        │ SQLite   │     │ Claude   │     │ GitHub   │
        │ Database │     │ API      │     │ API      │
        └──────────┘     └──────────┘     └──────────┘
+                                         (PyGithub +
+                                          App Auth)
 ```
 
 ## Open Questions
 
-- Should reviews be posted as PR comments or GitHub review objects (with inline comments)?
 - How to handle very large PRs that exceed context limits?
 - Should botbaki have any "memory" of previous reviews on the same PR?
 - Cost controls: daily/monthly budget caps?
@@ -160,7 +157,9 @@ CREATE TABLE review_feedback (
 
 ## Priority Order
 
-1. **GitHub comment triggers** - most useful for testing with real users
-2. **Feedback collection** - start gathering data early
-3. **Online service** - needed for production use
-4. **Opt-in system** - nice to have once service is stable
+1. ~~GitHub comment triggers~~ ✓
+2. ~~Inline review comments~~ ✓
+3. ~~Feedback collection (basic)~~ ✓
+4. **Webhooks** - for real-time response
+5. **Opt-in system** - proactive reviews for interested users
+6. **Advanced feedback** - per-suggestion tracking and reports
