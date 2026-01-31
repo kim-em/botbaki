@@ -524,9 +524,20 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
             return 0
 
         # Parse feedback for patterns
-        helpful_pattern = re.compile(r'(issue|suggestion)\s*(\d+)\s*(?:was\s+)?(helpful|great|good|useful|valuable)', re.I)
-        unhelpful_pattern = re.compile(r'(issue|suggestion)\s*(\d+)\s*(?:was\s+)?(unhelpful|wrong|bad|incorrect|useless)', re.I)
-        partial_pattern = re.compile(r'(issue|suggestion)\s*(\d+)\s*(?:was\s+)?(fine|ok|reasonable|interesting)', re.I)
+        # Match: "Issue 1 was helpful", "Suggestion 2 is wrong", "Issues 3 and 4 were unhelpful"
+        helpful_words = r'helpful|great|good|useful|valuable|very helpful'
+        unhelpful_words = r'unhelpful|wrong|bad|incorrect|useless|not helpful'
+        partial_words = r'fine|ok|okay|reasonable|interesting|redundant'
+
+        # Single item: "Issue 1 was helpful"
+        helpful_pattern = re.compile(rf'(issue|suggestion)\s*(\d+)\s*(?:was\s+|is\s+)?(?:{helpful_words})', re.I)
+        unhelpful_pattern = re.compile(rf'(issue|suggestion)\s*(\d+)\s*(?:was\s+|is\s+)?(?:{unhelpful_words})', re.I)
+        partial_pattern = re.compile(rf'(issue|suggestion)\s*(\d+)\s*(?:was\s+|is\s+)?(?:{partial_words})', re.I)
+
+        # Multi-item: "Issues 3 and 4 were unhelpful"
+        multi_helpful = re.compile(rf'(issues?|suggestions?)\s*(\d+)\s*(?:and|,)\s*(\d+)\s*(?:were\s+|are\s+)?(?:{helpful_words})', re.I)
+        multi_unhelpful = re.compile(rf'(issues?|suggestions?)\s*(\d+)\s*(?:and|,)\s*(\d+)\s*(?:were\s+|are\s+)?(?:{unhelpful_words})', re.I)
+        multi_partial = re.compile(rf'(issues?|suggestions?)\s*(\d+)\s*(?:and|,)\s*(\d+)\s*(?:were\s+|are\s+)?(?:{partial_words})', re.I)
 
         helpful_items = []
         unhelpful_items = []
@@ -560,7 +571,7 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
             print(text)
             print()
 
-            # Extract patterns
+            # Extract patterns - single items
             for match in helpful_pattern.finditer(text):
                 item_type = match.group(1).lower()
                 item_num = match.group(2)
@@ -587,6 +598,34 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
                     total_issues_mentioned += 1
                 else:
                     total_suggestions_mentioned += 1
+
+            # Extract patterns - multi items ("Issues 3 and 4 were unhelpful")
+            for match in multi_helpful.finditer(text):
+                item_type = match.group(1).lower().rstrip('s')  # issues -> issue
+                for num in [match.group(2), match.group(3)]:
+                    helpful_items.append(f"{item_type} {num}")
+                    if item_type == 'issue':
+                        total_issues_mentioned += 1
+                    else:
+                        total_suggestions_mentioned += 1
+
+            for match in multi_unhelpful.finditer(text):
+                item_type = match.group(1).lower().rstrip('s')
+                for num in [match.group(2), match.group(3)]:
+                    unhelpful_items.append(f"{item_type} {num}")
+                    if item_type == 'issue':
+                        total_issues_mentioned += 1
+                    else:
+                        total_suggestions_mentioned += 1
+
+            for match in multi_partial.finditer(text):
+                item_type = match.group(1).lower().rstrip('s')
+                for num in [match.group(2), match.group(3)]:
+                    partial_items.append(f"{item_type} {num}")
+                    if item_type == 'issue':
+                        total_issues_mentioned += 1
+                    else:
+                        total_suggestions_mentioned += 1
 
         # Summary
         print("=" * 80)
