@@ -373,17 +373,21 @@ class GitHubClient:
 
         endpoint = f'/repos/{owner}/{repo}/issues/{issue_number}/comments'
 
-        # Use gh api with stdin for the body (avoids command-line length limits)
+        # Use gh api with JSON input via stdin (avoids command-line length limits)
         cmd = [
             'gh', 'api', endpoint,
             '--method', 'POST',
-            '-f', 'body=@-'  # Read body from stdin
+            '--input', '-'  # Read JSON body from stdin
         ]
+
+        # Prepare JSON payload
+        import json as json_module
+        payload = json_module.dumps({"body": body})
 
         try:
             result = subprocess.run(
                 cmd,
-                input=body,
+                input=payload,
                 capture_output=True,
                 text=True,
                 check=True,

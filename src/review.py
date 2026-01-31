@@ -354,7 +354,8 @@ def generate_pr_review(
         'title': title,
         'author': pr_row['author_login'],
         'commit_sha': commit_sha,
-        'state': pr_row['state']
+        'state': pr_row['state'],
+        'current_date': datetime.now().strftime('%Y-%m-%d')
     }
 
     if use_sdk:

@@ -129,13 +129,29 @@ class Daemon:
         cursor = db.execute(query, (repo_id,))
         return [dict(row) for row in cursor.fetchall()]
 
+    def _strip_code_blocks(self, text: str) -> str:
+        """Remove code blocks and inline code from text.
+
+        This prevents triggers inside code examples from being detected.
+        """
+        # Remove fenced code blocks (```...```)
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        # Remove inline code (`...`)
+        text = re.sub(r'`[^`]+`', '', text)
+        # Remove markdown tables (lines starting with |)
+        text = re.sub(r'^\|.*\|$', '', text, flags=re.MULTILINE)
+        return text
+
     def _parse_trigger(self, body: str) -> Optional[Tuple[str, str]]:
         """Parse @botbaki command from comment body.
 
         Returns:
             Tuple of (command, args) or None if no valid command found.
         """
-        match = TRIGGER_PATTERN.search(body)
+        # Strip code blocks to avoid triggering on examples
+        clean_body = self._strip_code_blocks(body)
+
+        match = TRIGGER_PATTERN.search(clean_body)
         if not match:
             return None
 
