@@ -6,14 +6,12 @@ After=network.target
 Type=simple
 User=kim
 WorkingDirectory=/home/kim/projects/botbaki
-ExecStart=/home/kim/projects/botbaki/botbaki daemon
+ExecStart=/home/kim/projects/botbaki/.venv/bin/python3 -m src.cli daemon
 Restart=always
 RestartSec=30
 
-# Environment
-Environment=ANTHROPIC_API_KEY=
-# Or use EnvironmentFile for secrets:
-# EnvironmentFile=/home/kim/.config/botbaki/env
+# Environment - load from file for secrets
+EnvironmentFile=/home/kim/.config/botbaki/env
 
 # Logging
 StandardOutput=journal
@@ -25,6 +23,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/kim/projects/botbaki/data
+ReadOnlyPaths=/home/kim/.config/botbaki
 
 [Install]
 WantedBy=multi-user.target
