@@ -1,3 +1,4 @@
 # Core dependencies (Python standard library only for basic functionality)
 # For AI review generation:
 anthropic>=0.40.0
+pydantic>=2.0

@@ -398,3 +398,88 @@ class GitHubClient:
             raise GitHubError(f"Failed to post comment: {e.stderr}")
         except json.JSONDecodeError as e:
             raise GitHubError(f"Invalid JSON response: {e}")
+
+    def create_pull_request_review(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str,
+        commit_id: str,
+        comments: Optional[List[Dict[str, Any]]] = None,
+        event: str = "COMMENT"
+    ) -> Dict[str, Any]:
+        """
+        Create a pull request review with optional inline comments.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pr_number: PR number
+            body: Review body (summary)
+            commit_id: SHA of commit being reviewed
+            comments: List of inline comments, each with:
+                - path: file path
+                - line: line number in new file
+                - start_line: (optional) for multi-line comments
+                - body: comment text
+            event: Review event type (COMMENT, APPROVE, REQUEST_CHANGES)
+
+        Returns:
+            Created review object
+        """
+        # Ensure minimum delay between requests
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self.request_delay:
+            time.sleep(self.request_delay - elapsed)
+
+        self._last_request_time = time.time()
+
+        endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}/reviews'
+
+        payload = {
+            "commit_id": commit_id,
+            "body": body,
+            "event": event,
+        }
+
+        if comments:
+            # Convert to GitHub API format
+            api_comments = []
+            for c in comments:
+                comment = {
+                    "path": c["path"],
+                    "body": c["body"],
+                    "line": c["line"],
+                    "side": "RIGHT",  # Always comment on new file
+                }
+                if c.get("start_line"):
+                    comment["start_line"] = c["start_line"]
+                    comment["start_side"] = "RIGHT"
+                api_comments.append(comment)
+            payload["comments"] = api_comments
+
+        # Use gh api with JSON input via stdin
+        cmd = [
+            'gh', 'api', endpoint,
+            '--method', 'POST',
+            '--input', '-'
+        ]
+
+        import json as json_module
+        payload_json = json_module.dumps(payload)
+
+        try:
+            result = subprocess.run(
+                cmd,
+                input=payload_json,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=60  # Longer timeout for reviews with many comments
+            )
+            return json.loads(result.stdout)
+        except subprocess.CalledProcessError as e:
+            raise GitHubError(f"Failed to create PR review: {e.stderr}")
+        except json.JSONDecodeError as e:
+            raise GitHubError(f"Invalid JSON response: {e}")

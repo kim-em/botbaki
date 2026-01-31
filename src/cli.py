@@ -450,16 +450,33 @@ def cmd_review(args: argparse.Namespace) -> int:
             verbose=True
         )
 
+        inline_comments = result.get('inline_comments', [])
+
         # Print review to stdout
         print("\n" + "="*80)
         print(f"AI Review for PR #{args.pr_number}")
         print(f"Commit: {result['commit_sha'][:8]}")
         print(f"Model: {result['model_used']} ({result['generation_method']})")
         print(f"Prompt: {result['prompt_path']}")
+        print(f"Inline comments: {len(inline_comments)}")
         if result.get('cached'):
             print(f"Status: CACHED (returning existing review)")
         print("="*80 + "\n")
         print(result['review_text'])
+
+        # Show inline comments unless --single
+        if inline_comments and not getattr(args, 'single', False):
+            print("\n" + "-"*80)
+            print("INLINE COMMENTS:")
+            print("-"*80)
+            for i, c in enumerate(inline_comments, 1):
+                line_info = f"{c['path']}:{c['line']}"
+                if c.get('start_line'):
+                    line_info = f"{c['path']}:{c['start_line']}-{c['line']}"
+                print(f"\n[{i}] {line_info}")
+                print(c['body'][:500] + ("..." if len(c['body']) > 500 else ""))
+            print("-"*80)
+
         print("\n" + "="*80)
         if result.get('cached'):
             print(f"Cached review (ID: {result['review_id']})")
@@ -527,6 +544,8 @@ def main() -> int:
                               help='Review only the diff, exclude timeline/comments')
     review_parser.add_argument('--force', action='store_true',
                               help='Regenerate review even if one exists')
+    review_parser.add_argument('--single', action='store_true',
+                              help='Show only summary (no inline comments info)')
 
     # daemon command
     daemon_parser = subparsers.add_parser('daemon', help='Run polling daemon for @botbaki triggers')

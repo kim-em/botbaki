@@ -208,6 +208,7 @@ class Daemon:
 
         # Parse args
         diff_only = '--diff-only' in args or '-d' in args
+        single_comment = '--single' in args  # Post as issue comment instead of PR review
 
         # Get current commit SHA to check for duplicate triggers
         pr_row = database.get_pr_by_id(pr_id)
@@ -239,7 +240,7 @@ class Daemon:
                 self._mark_processed(comment_id, pr_id, author, "review-duplicate")
             return
 
-        self.log(f"  Generating review (diff_only={diff_only})...")
+        self.log(f"  Generating review (diff_only={diff_only}, single={single_comment})...")
 
         try:
             # Generate review
@@ -251,24 +252,48 @@ class Daemon:
                 verbose=False
             )
 
-            # Format response
-            response = self._format_review_response(result, trigger)
+            inline_comments = result.get('inline_comments', [])
 
-            # Post comment
-            self.log(f"  Posting response...")
-            comment_result = self.client.post_issue_comment(
-                self.owner, self.repo, pr_number, response
-            )
-
-            response_comment_id = comment_result.get('id')
-            self.log(f"  Posted comment: {comment_result.get('html_url')}")
+            # Decide posting method: --single or no inline comments -> issue comment
+            # Otherwise -> PR review with inline comments
+            if single_comment or not inline_comments:
+                # Post as single issue comment (legacy mode)
+                response = self._format_review_response(result, trigger)
+                self.log(f"  Posting as issue comment...")
+                comment_result = self.client.post_issue_comment(
+                    self.owner, self.repo, pr_number, response
+                )
+                response_id = comment_result.get('id')
+                self.log(f"  Posted comment: {comment_result.get('html_url')}")
+            else:
+                # Post as PR review with inline comments
+                summary = self._format_review_response(result, trigger)
+                self.log(f"  Posting as PR review with {len(inline_comments)} inline comments...")
+                review_result = self.client.create_pull_request_review(
+                    owner=self.owner,
+                    repo=self.repo,
+                    pr_number=pr_number,
+                    body=summary,
+                    commit_id=current_commit,
+                    comments=inline_comments,
+                    event="COMMENT"
+                )
+                response_id = review_result.get('id')
+                self.log(f"  Posted PR review: {review_result.get('html_url')}")
 
             # Mark as processed
+            flags = []
+            if diff_only:
+                flags.append('--diff-only')
+            if single_comment:
+                flags.append('--single')
+            command_str = 'review' + (''.join(flags) if flags else '')
+
             self._mark_processed(
                 comment_id, pr_id, author,
-                f"review{'--diff-only' if diff_only else ''}",
+                command_str,
                 review_id=result['review_id'],
-                response_comment_id=response_comment_id
+                response_comment_id=response_id
             )
 
         except Exception as e:
@@ -305,7 +330,8 @@ class Daemon:
 
 | Command | Description |
 |---------|-------------|
-| `@botbaki review` | Generate an AI review of this PR |
+| `@botbaki review` | Generate an AI review with inline comments |
+| `@botbaki review --single` | Post review as a single comment (no inline) |
 | `@botbaki review --diff-only` | Review only the diff (no timeline context) |
 | `@botbaki feedback <text>` | Provide feedback on the last review |
 | `@botbaki help` | Show this help message |
