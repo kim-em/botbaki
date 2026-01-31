@@ -4,16 +4,43 @@ from __future__ import annotations
 
 import sys
 import time
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from github import Github, Auth, GithubException
 from github.GithubException import RateLimitExceededException
+
+T = TypeVar('T')
 
 # Rate limiting configuration
 DEFAULT_REQUEST_DELAY = 0.5  # 500ms between requests
 MAX_RETRIES = 5
 INITIAL_RETRY_DELAY = 1.0
+
+
+def with_retry(func: Callable[..., T]) -> Callable[..., T]:
+    """Decorator for GitHub API methods with rate limiting and retry logic.
+
+    Handles:
+    - Rate limit delay between requests
+    - Retry with exponential backoff on rate limit exceptions
+    - Conversion of GithubException to GitHubError
+    """
+    @wraps(func)
+    def wrapper(self: 'GitHubClient', *args: Any, **kwargs: Any) -> T:
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                return func(self, *args, **kwargs)
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Exceeded maximum retries")
+    return wrapper
 
 
 class GitHubError(Exception):
@@ -235,6 +262,7 @@ class GitHubClient:
                         'id': c.id,
                         'node_id': c.raw_data.get('node_id', ''),
                         'pull_request_review_id': c.raw_data.get('pull_request_review_id'),
+                        'in_reply_to_id': c.raw_data.get('in_reply_to_id'),
                         'user': {'login': c.user.login, 'id': c.user.id},
                         'body': c.body,
                         'path': c.path,

@@ -425,6 +425,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
     try:
         from . import daemon
         return daemon.run_daemon(
+            repository=args.repo,
             poll_interval=args.interval,
             verbose=not args.quiet
         )
@@ -500,22 +501,52 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
     try:
         db = database.get_database()
 
+        # Check if new columns exist (backwards compatibility)
+        try:
+            db.execute("SELECT comment_type FROM review_feedback LIMIT 1")
+            has_new_columns = True
+        except Exception:
+            has_new_columns = False
+
         # Query all feedback with review context
-        query = """
-            SELECT
-                rf.id,
-                rf.pr_number,
-                rf.github_login,
-                rf.feedback_text,
-                rf.created_at,
-                pr.commit_sha,
-                pr.model_used,
-                pr.prompt_path,
-                pr.review_text
-            FROM review_feedback rf
-            LEFT JOIN pr_reviews pr ON rf.review_id = pr.id
-            ORDER BY rf.created_at DESC
-        """
+        if has_new_columns:
+            query = """
+                SELECT
+                    rf.id,
+                    rf.pr_number,
+                    rf.github_login,
+                    rf.feedback_text,
+                    rf.created_at,
+                    pr.commit_sha,
+                    pr.model_used,
+                    pr.prompt_path,
+                    pr.review_text,
+                    rf.comment_type,
+                    rf.path,
+                    rf.line
+                FROM review_feedback rf
+                LEFT JOIN pr_reviews pr ON rf.review_id = pr.id
+                ORDER BY rf.created_at DESC
+            """
+        else:
+            query = """
+                SELECT
+                    rf.id,
+                    rf.pr_number,
+                    rf.github_login,
+                    rf.feedback_text,
+                    rf.created_at,
+                    pr.commit_sha,
+                    pr.model_used,
+                    pr.prompt_path,
+                    pr.review_text,
+                    NULL as comment_type,
+                    NULL as path,
+                    NULL as line
+                FROM review_feedback rf
+                LEFT JOIN pr_reviews pr ON rf.review_id = pr.id
+                ORDER BY rf.created_at DESC
+            """
         cursor = db.execute(query)
         rows = cursor.fetchall()
 
@@ -560,9 +591,15 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
             commit = row['commit_sha'][:8] if row['commit_sha'] else 'N/A'
             model = row['model_used'] or 'N/A'
             prompt = row['prompt_path'] or 'N/A'
+            comment_type = row['comment_type'] or 'issue'
+            path = row['path']
+            line = row['line']
 
             print("-" * 80)
-            print(f"PR #{pr_number} | {created} | by @{author}")
+            if comment_type == 'review' and path:
+                print(f"PR #{pr_number} | {created} | by @{author} | INLINE: {path}:{line}")
+            else:
+                print(f"PR #{pr_number} | {created} | by @{author}")
             print(f"Review: commit={commit}, model={model}")
             if prompt != 'N/A':
                 prompt_name = prompt.split('/')[-1] if '/' in prompt else prompt
@@ -732,6 +769,8 @@ def main() -> int:
 
     # daemon command
     daemon_parser = subparsers.add_parser('daemon', help='Run polling daemon for @botbaki triggers')
+    daemon_parser.add_argument('--repo', default='leanprover-community/mathlib4',
+                               help='Repository to monitor (default: leanprover-community/mathlib4)')
     daemon_parser.add_argument('--interval', type=int, default=120,
                                help='Poll interval in seconds (default: 120)')
     daemon_parser.add_argument('--quiet', '-q', action='store_true',
