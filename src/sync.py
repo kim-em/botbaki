@@ -386,7 +386,8 @@ def incremental_sync(full_name: str, request_delay: float = 0.9, verbose: bool =
                 print("  (Updated)")
 
         if needs_update:
-            sync_pr_details(client, owner, repo, pr_id, pr_number, pr, verbose=verbose)
+            # Always force_fetch since PR listing API doesn't include comment counts
+            sync_pr_details(client, owner, repo, pr_id, pr_number, pr, verbose=verbose, force_fetch=True)
 
             # Update sync state
             database.update_pr_sync_state(
