@@ -1,19 +1,19 @@
-"""GitHub API client with rate limiting and retry logic."""
+"""GitHub API client using PyGithub with GitHub App authentication."""
 
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from github import Github, Auth, GithubException
+from github.GithubException import RateLimitExceededException
 
 # Rate limiting configuration
-# GitHub allows 5000 requests/hour for authenticated users
-# Default to 0.9s delay = ~4000 req/hour, leaving 1000 spare for other use
-DEFAULT_REQUEST_DELAY = 0.9  # 900ms between requests (~4000 req/hour)
+DEFAULT_REQUEST_DELAY = 0.5  # 500ms between requests
 MAX_RETRIES = 5
-INITIAL_RETRY_DELAY = 1.0  # Start with 1 second on rate limit
+INITIAL_RETRY_DELAY = 1.0
 
 
 class GitHubError(Exception):
@@ -31,196 +31,103 @@ class RateLimitError(GitHubError):
     pass
 
 
+def _load_github_app_credentials() -> tuple[int, str, int]:
+    """
+    Load GitHub App credentials from config directory.
+
+    Returns:
+        Tuple of (app_id, private_key, installation_id)
+
+    Raises:
+        GitHubError: If credentials are missing or invalid
+    """
+    config_dir = Path.home() / ".config" / "botbaki"
+
+    try:
+        app_id_file = config_dir / "github-app-id"
+        private_key_file = config_dir / "github-app-key.pem"
+        installation_id_file = config_dir / "github-installation-id"
+
+        if not app_id_file.exists():
+            raise GitHubError(f"Missing GitHub App ID file: {app_id_file}")
+        if not private_key_file.exists():
+            raise GitHubError(f"Missing GitHub App private key: {private_key_file}")
+        if not installation_id_file.exists():
+            raise GitHubError(f"Missing GitHub installation ID: {installation_id_file}")
+
+        app_id = int(app_id_file.read_text().strip())
+        private_key = private_key_file.read_text()
+        installation_id = int(installation_id_file.read_text().strip())
+
+        return (app_id, private_key, installation_id)
+
+    except ValueError as e:
+        raise GitHubError(f"Invalid credentials format: {e}")
+
+
 class GitHubClient:
-    """Client for interacting with the GitHub API via gh CLI."""
+    """Client for interacting with GitHub API using GitHub App authentication."""
 
     def __init__(self, request_delay: float = DEFAULT_REQUEST_DELAY):
         """
-        Initialize GitHub client.
+        Initialize GitHub client with App authentication.
 
         Args:
-            request_delay: Minimum seconds between requests (default 0.9s = ~4000 req/hour)
+            request_delay: Minimum seconds between requests (default 0.5s)
         """
         self._last_request_time: float = 0
         self.request_delay = request_delay
-        self._check_gh_installed()
 
-    def _check_gh_installed(self) -> None:
-        """Check if gh CLI is installed and authenticated."""
-        try:
-            result = subprocess.run(
-                ['gh', 'auth', 'status'],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            if result.returncode != 0:
-                raise GitHubError(
-                    "gh CLI not authenticated. Run 'gh auth login' first."
-                )
-        except FileNotFoundError:
-            raise GitHubError(
-                "gh CLI not found. Please install GitHub CLI from https://cli.github.com"
-            )
+        # Load credentials and authenticate
+        app_id, private_key, installation_id = _load_github_app_credentials()
 
-    def request(
-        self,
-        endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        paginate: bool = False
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """
-        Make an API request with rate limiting and retry logic.
+        # Create GitHub App authentication
+        app_auth = Auth.AppAuth(app_id, private_key)
+        installation_auth = app_auth.get_installation_auth(installation_id)
 
-        Args:
-            endpoint: API endpoint (e.g., "/repos/owner/repo/pulls")
-            params: Query parameters
-            paginate: Whether to automatically fetch all pages
+        # Create authenticated GitHub client
+        self._github = Github(auth=installation_auth)
+        self._installation_id = installation_id
 
-        Returns:
-            API response (dict or list if paginated)
-
-        Raises:
-            NetworkError: On network failures
-            RateLimitError: If rate limited after retries
-            GitHubError: On other API errors
-        """
-        # Ensure minimum delay between requests
+    def _rate_limit_delay(self) -> None:
+        """Ensure minimum delay between requests."""
         elapsed = time.time() - self._last_request_time
         if elapsed < self.request_delay:
             time.sleep(self.request_delay - elapsed)
+        self._last_request_time = time.time()
 
-        retry_delay = INITIAL_RETRY_DELAY
+    def _handle_rate_limit(self, e: RateLimitExceededException, attempt: int) -> None:
+        """Handle rate limit exception with exponential backoff."""
+        if attempt >= MAX_RETRIES:
+            raise RateLimitError(f"Rate limited after {MAX_RETRIES} retries")
 
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                self._last_request_time = time.time()
+        # Get reset time from the exception or rate limit API
+        try:
+            rate_limit = self._github.get_rate_limit()
+            reset_time = rate_limit.core.reset.timestamp()
+            wait_time = max(reset_time - time.time() + 1, INITIAL_RETRY_DELAY * (2 ** attempt))
+        except Exception:
+            wait_time = INITIAL_RETRY_DELAY * (2 ** attempt)
 
-                # Build endpoint with query parameters
-                full_endpoint = endpoint
-                if params:
-                    # Construct query string
-                    query_parts = [f"{key}={value}" for key, value in params.items()]
-                    separator = '&' if '?' in endpoint else '?'
-                    full_endpoint = f"{endpoint}{separator}{'&'.join(query_parts)}"
-
-                # Build gh command
-                cmd = ['gh', 'api', full_endpoint]
-
-                # Add pagination flag if requested
-                if paginate:
-                    cmd.append('--paginate')
-
-                # Execute command
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=30
-                )
-
-                # Parse JSON response
-                response_text = result.stdout.strip()
-                if not response_text:
-                    return [] if paginate else {}
-
-                return json.loads(response_text)
-
-            except subprocess.TimeoutExpired:
-                if attempt < MAX_RETRIES:
-                    sys.stderr.write(
-                        f"Request timeout, retrying (attempt {attempt + 1}/{MAX_RETRIES})...\n"
-                    )
-                    sys.stderr.flush()
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                else:
-                    raise NetworkError(f"Request timeout after {MAX_RETRIES} retries")
-
-            except subprocess.CalledProcessError as e:
-                stderr = e.stderr.lower()
-
-                # Check if rate limited
-                if 'rate limit' in stderr or 'api rate limit exceeded' in stderr:
-                    if attempt < MAX_RETRIES:
-                        # Get rate limit info
-                        try:
-                            rate_info = self.get_rate_limit()
-                            reset_time = rate_info['resources']['core']['reset']
-                            remaining = rate_info['resources']['core']['remaining']
-
-                            # If no requests remaining, wait until reset
-                            if remaining == 0:
-                                wait_time = max(reset_time - time.time() + 1, retry_delay)
-                            else:
-                                wait_time = retry_delay
-
-                            sys.stderr.write(
-                                f"Rate limited (remaining: {remaining}), "
-                                f"waiting {wait_time:.1f}s "
-                                f"(attempt {attempt + 1}/{MAX_RETRIES})...\n"
-                            )
-                            sys.stderr.flush()
-                            time.sleep(wait_time)
-                            retry_delay *= 2
-                            continue
-                        except Exception:
-                            # Fallback if rate limit check fails
-                            sys.stderr.write(
-                                f"Rate limited, waiting {retry_delay:.1f}s "
-                                f"(attempt {attempt + 1}/{MAX_RETRIES})...\n"
-                            )
-                            sys.stderr.flush()
-                            time.sleep(retry_delay)
-                            retry_delay *= 2
-                            continue
-                    else:
-                        raise RateLimitError(
-                            f"Rate limited after {MAX_RETRIES} retries"
-                        )
-
-                # Check for network errors
-                elif 'connection' in stderr or 'network' in stderr:
-                    if attempt < MAX_RETRIES:
-                        sys.stderr.write(
-                            f"Network error, retrying (attempt {attempt + 1}/{MAX_RETRIES})...\n"
-                        )
-                        sys.stderr.flush()
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                        continue
-                    else:
-                        raise NetworkError(f"Network error after {MAX_RETRIES} retries: {e.stderr}")
-
-                # Other API error
-                else:
-                    raise GitHubError(f"GitHub API error: {e.stderr}")
-
-            except json.JSONDecodeError as e:
-                raise GitHubError(f"Invalid JSON response: {e}")
-
-        raise GitHubError("Unexpected error in request retry loop")
+        sys.stderr.write(
+            f"Rate limited, waiting {wait_time:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})...\n"
+        )
+        sys.stderr.flush()
+        time.sleep(wait_time)
 
     def get_rate_limit(self) -> Dict[str, Any]:
-        """
-        Get current rate limit status.
-
-        Returns:
-            Rate limit information with 'resources' dict
-        """
-        try:
-            result = subprocess.run(
-                ['gh', 'api', '/rate_limit'],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=10
-            )
-            return json.loads(result.stdout)
-        except Exception as e:
-            raise GitHubError(f"Failed to get rate limit: {e}")
+        """Get current rate limit status."""
+        self._rate_limit_delay()
+        rate_limit = self._github.get_rate_limit()
+        return {
+            'resources': {
+                'core': {
+                    'limit': rate_limit.core.limit,
+                    'remaining': rate_limit.core.remaining,
+                    'reset': int(rate_limit.core.reset.timestamp())
+                }
+            }
+        }
 
     def get_pulls(
         self,
@@ -232,30 +139,32 @@ class GitHubClient:
         per_page: int = 100,
         page: int = 1
     ) -> List[Dict[str, Any]]:
-        """
-        Get pull requests for a repository.
+        """Get pull requests for a repository."""
+        self._rate_limit_delay()
 
-        Args:
-            owner: Repository owner
-            repo: Repository name
-            state: PR state ('open', 'closed', 'all')
-            sort: Sort by ('created', 'updated', 'popularity', 'long-running')
-            direction: Sort direction ('asc', 'desc')
-            per_page: Results per page (max 100)
-            page: Page number
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                pulls = repository.get_pulls(state=state, sort=sort, direction=direction)
 
-        Returns:
-            List of PR objects
-        """
-        endpoint = f'/repos/{owner}/{repo}/pulls'
-        params = {
-            'state': state,
-            'sort': sort,
-            'direction': direction,
-            'per_page': str(per_page),
-            'page': str(page)
-        }
-        return self.request(endpoint, params)
+                # Manual pagination since PyGithub's pagination is different
+                start = (page - 1) * per_page
+                results = []
+                for i, pr in enumerate(pulls):
+                    if i < start:
+                        continue
+                    if i >= start + per_page:
+                        break
+                    results.append(self._pr_to_dict(pr))
+
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
 
     def get_pull_commits(
         self,
@@ -265,9 +174,44 @@ class GitHubClient:
         per_page: int = 100
     ) -> List[Dict[str, Any]]:
         """Get commits for a pull request."""
-        endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}/commits'
-        params = {'per_page': str(per_page)}
-        return self.request(endpoint, params, paginate=True)
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                pr = repository.get_pull(pr_number)
+                commits = pr.get_commits()
+
+                results = []
+                for commit in commits:
+                    results.append({
+                        'sha': commit.sha,
+                        'node_id': commit.raw_data.get('node_id', ''),
+                        'commit': {
+                            'message': commit.commit.message,
+                            'author': {
+                                'name': commit.commit.author.name if commit.commit.author else '',
+                                'email': commit.commit.author.email if commit.commit.author else '',
+                                'date': commit.commit.author.date.isoformat() if commit.commit.author and commit.commit.author.date else ''
+                            },
+                            'committer': {
+                                'name': commit.commit.committer.name if commit.commit.committer else '',
+                                'email': commit.commit.committer.email if commit.commit.committer else '',
+                                'date': commit.commit.committer.date.isoformat() if commit.commit.committer and commit.commit.committer.date else ''
+                            }
+                        },
+                        'author': {'login': commit.author.login} if commit.author else None,
+                        'committer': {'login': commit.committer.login} if commit.committer else None,
+                        'html_url': commit.html_url
+                    })
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
 
     def get_pull_review_comments(
         self,
@@ -277,9 +221,45 @@ class GitHubClient:
         per_page: int = 100
     ) -> List[Dict[str, Any]]:
         """Get review comments (inline code comments) for a pull request."""
-        endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}/comments'
-        params = {'per_page': str(per_page)}
-        return self.request(endpoint, params, paginate=True)
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                pr = repository.get_pull(pr_number)
+                comments = pr.get_review_comments()
+
+                results = []
+                for c in comments:
+                    results.append({
+                        'id': c.id,
+                        'node_id': c.raw_data.get('node_id', ''),
+                        'pull_request_review_id': c.raw_data.get('pull_request_review_id'),
+                        'user': {'login': c.user.login, 'id': c.user.id},
+                        'body': c.body,
+                        'path': c.path,
+                        'commit_id': c.commit_id,
+                        'original_commit_id': c.original_commit_id,
+                        'diff_hunk': c.diff_hunk,
+                        'position': c.position,
+                        'original_position': c.original_position,
+                        'line': c.raw_data.get('line'),
+                        'original_line': c.raw_data.get('original_line'),
+                        'start_line': c.raw_data.get('start_line'),
+                        'side': c.raw_data.get('side', 'RIGHT'),
+                        'start_side': c.raw_data.get('start_side'),
+                        'created_at': c.created_at.isoformat() if c.created_at else '',
+                        'updated_at': c.updated_at.isoformat() if c.updated_at else '',
+                        'html_url': c.html_url
+                    })
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
 
     def get_issue_comments(
         self,
@@ -289,9 +269,34 @@ class GitHubClient:
         per_page: int = 100
     ) -> List[Dict[str, Any]]:
         """Get issue comments (general discussion) for a pull request."""
-        endpoint = f'/repos/{owner}/{repo}/issues/{pr_number}/comments'
-        params = {'per_page': str(per_page)}
-        return self.request(endpoint, params, paginate=True)
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                issue = repository.get_issue(pr_number)
+                comments = issue.get_comments()
+
+                results = []
+                for c in comments:
+                    results.append({
+                        'id': c.id,
+                        'node_id': c.raw_data.get('node_id', ''),
+                        'user': {'login': c.user.login, 'id': c.user.id},
+                        'author_association': c.raw_data.get('author_association', 'NONE'),
+                        'body': c.body,
+                        'created_at': c.created_at.isoformat() if c.created_at else '',
+                        'updated_at': c.updated_at.isoformat() if c.updated_at else '',
+                        'html_url': c.html_url
+                    })
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
 
     def get_pull_reviews(
         self,
@@ -301,9 +306,35 @@ class GitHubClient:
         per_page: int = 100
     ) -> List[Dict[str, Any]]:
         """Get reviews for a pull request."""
-        endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}/reviews'
-        params = {'per_page': str(per_page)}
-        return self.request(endpoint, params, paginate=True)
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                pr = repository.get_pull(pr_number)
+                reviews = pr.get_reviews()
+
+                results = []
+                for r in reviews:
+                    results.append({
+                        'id': r.id,
+                        'node_id': r.raw_data.get('node_id', ''),
+                        'user': {'login': r.user.login, 'id': r.user.id},
+                        'author_association': r.raw_data.get('author_association', 'NONE'),
+                        'body': r.body,
+                        'state': r.state,
+                        'commit_id': r.commit_id,
+                        'submitted_at': r.submitted_at.isoformat() if r.submitted_at else '',
+                        'html_url': r.html_url
+                    })
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
 
     def get_pull_files(
         self,
@@ -312,20 +343,101 @@ class GitHubClient:
         pr_number: int,
         per_page: int = 100
     ) -> List[Dict[str, Any]]:
-        """
-        Get files changed in a pull request with diffs.
+        """Get files changed in a pull request with diffs."""
+        self._rate_limit_delay()
 
-        Returns list of file objects with:
-        - filename, status, additions, deletions, changes, patch
-        """
-        endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}/files'
-        params = {'per_page': str(per_page)}
-        return self.request(endpoint, params, paginate=True)
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                pr = repository.get_pull(pr_number)
+                files = pr.get_files()
+
+                results = []
+                for f in files:
+                    results.append({
+                        'filename': f.filename,
+                        'status': f.status,
+                        'additions': f.additions,
+                        'deletions': f.deletions,
+                        'changes': f.changes,
+                        'patch': f.patch if f.patch else ''
+                    })
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
 
     def get_repository(self, owner: str, repo: str) -> Dict[str, Any]:
         """Get repository information."""
-        endpoint = f'/repos/{owner}/{repo}'
-        return self.request(endpoint)
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                return {
+                    'id': repository.id,
+                    'name': repository.name,
+                    'full_name': repository.full_name,
+                    'default_branch': repository.default_branch,
+                    'html_url': repository.html_url,
+                    'owner': {
+                        'login': repository.owner.login,
+                        'id': repository.owner.id,
+                        'type': repository.owner.type,
+                        'html_url': repository.owner.html_url
+                    }
+                }
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
+
+    def get_pull(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
+        """Get a specific pull request with full details."""
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                pr = repository.get_pull(pr_number)
+                return self._pr_to_dict(pr)
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
+
+    def _pr_to_dict(self, pr) -> Dict[str, Any]:
+        """Convert PyGithub PullRequest to dict matching our schema."""
+        return {
+            'number': pr.number,
+            'id': pr.id,
+            'node_id': pr.raw_data.get('node_id', ''),
+            'title': pr.title,
+            'body': pr.body,
+            'state': pr.state,
+            'draft': pr.draft,
+            'user': {'login': pr.user.login, 'id': pr.user.id},
+            'created_at': pr.created_at.isoformat() if pr.created_at else '',
+            'updated_at': pr.updated_at.isoformat() if pr.updated_at else '',
+            'closed_at': pr.closed_at.isoformat() if pr.closed_at else None,
+            'merged_at': pr.merged_at.isoformat() if pr.merged_at else None,
+            'base': {'ref': pr.base.ref},
+            'head': {'ref': pr.head.ref, 'sha': pr.head.sha},
+            'comments': pr.comments,
+            'review_comments': pr.review_comments,
+            'commits': pr.commits,
+            'html_url': pr.html_url
+        }
 
     def print_rate_limit_status(self) -> None:
         """Print current rate limit status to stderr."""
@@ -352,52 +464,30 @@ class GitHubClient:
         issue_number: int,
         body: str
     ) -> Dict[str, Any]:
-        """
-        Post a comment on an issue or PR.
+        """Post a comment on an issue or PR."""
+        self._rate_limit_delay()
 
-        Args:
-            owner: Repository owner
-            repo: Repository name
-            issue_number: Issue/PR number
-            body: Comment body (markdown)
+        for attempt in range(MAX_RETRIES):
+            try:
+                repository = self._github.get_repo(f"{owner}/{repo}")
+                issue = repository.get_issue(issue_number)
+                comment = issue.create_comment(body)
 
-        Returns:
-            Created comment object with 'id', 'html_url', etc.
-        """
-        # Ensure minimum delay between requests
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.request_delay:
-            time.sleep(self.request_delay - elapsed)
+                return {
+                    'id': comment.id,
+                    'node_id': comment.raw_data.get('node_id', ''),
+                    'html_url': comment.html_url,
+                    'user': {'login': comment.user.login, 'id': comment.user.id},
+                    'body': comment.body,
+                    'created_at': comment.created_at.isoformat() if comment.created_at else ''
+                }
 
-        self._last_request_time = time.time()
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"Failed to post comment: {e}")
 
-        endpoint = f'/repos/{owner}/{repo}/issues/{issue_number}/comments'
-
-        # Use gh api with JSON input via stdin (avoids command-line length limits)
-        cmd = [
-            'gh', 'api', endpoint,
-            '--method', 'POST',
-            '--input', '-'  # Read JSON body from stdin
-        ]
-
-        # Prepare JSON payload
-        import json as json_module
-        payload = json_module.dumps({"body": body})
-
-        try:
-            result = subprocess.run(
-                cmd,
-                input=payload,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=30
-            )
-            return json.loads(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise GitHubError(f"Failed to post comment: {e.stderr}")
-        except json.JSONDecodeError as e:
-            raise GitHubError(f"Invalid JSON response: {e}")
+        raise GitHubError("Unexpected error in request retry loop")
 
     def create_pull_request_review(
         self,
@@ -409,77 +499,61 @@ class GitHubClient:
         comments: Optional[List[Dict[str, Any]]] = None,
         event: str = "COMMENT"
     ) -> Dict[str, Any]:
+        """Create a pull request review with optional inline comments.
+
+        Uses the raw GitHub API to support multi-line comments with
+        start_line/line and side parameters.
         """
-        Create a pull request review with optional inline comments.
+        self._rate_limit_delay()
 
-        Args:
-            owner: Repository owner
-            repo: Repository name
-            pr_number: PR number
-            body: Review body (summary)
-            commit_id: SHA of commit being reviewed
-            comments: List of inline comments, each with:
-                - path: file path
-                - line: line number in new file
-                - start_line: (optional) for multi-line comments
-                - body: comment text
-            event: Review event type (COMMENT, APPROVE, REQUEST_CHANGES)
-
-        Returns:
-            Created review object
-        """
-        # Ensure minimum delay between requests
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.request_delay:
-            time.sleep(self.request_delay - elapsed)
-
-        self._last_request_time = time.time()
-
-        endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}/reviews'
-
-        payload = {
-            "commit_id": commit_id,
-            "body": body,
-            "event": event,
-        }
-
-        if comments:
-            # Convert to GitHub API format
-            api_comments = []
-            for c in comments:
-                comment = {
-                    "path": c["path"],
-                    "body": c["body"],
-                    "line": c["line"],
-                    "side": "RIGHT",  # Always comment on new file
+        for attempt in range(MAX_RETRIES):
+            try:
+                # Build the request payload for the raw API
+                # PyGithub's create_review doesn't support all parameters
+                # (start_line, side, start_side) so we use the requester directly
+                payload: Dict[str, Any] = {
+                    'body': body,
+                    'event': event
                 }
-                if c.get("start_line"):
-                    comment["start_line"] = c["start_line"]
-                    comment["start_side"] = "RIGHT"
-                api_comments.append(comment)
-            payload["comments"] = api_comments
 
-        # Use gh api with JSON input via stdin
-        cmd = [
-            'gh', 'api', endpoint,
-            '--method', 'POST',
-            '--input', '-'
-        ]
+                if commit_id:
+                    payload['commit_id'] = commit_id
 
-        import json as json_module
-        payload_json = json_module.dumps(payload)
+                if comments:
+                    review_comments = []
+                    for c in comments:
+                        comment_dict = {
+                            'path': c['path'],
+                            'body': c['body'],
+                            'line': c['line'],
+                            'side': 'RIGHT'
+                        }
+                        if c.get('start_line'):
+                            comment_dict['start_line'] = c['start_line']
+                            comment_dict['start_side'] = 'RIGHT'
+                        review_comments.append(comment_dict)
+                    payload['comments'] = review_comments
 
-        try:
-            result = subprocess.run(
-                cmd,
-                input=payload_json,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=60  # Longer timeout for reviews with many comments
-            )
-            return json.loads(result.stdout)
-        except subprocess.CalledProcessError as e:
-            raise GitHubError(f"Failed to create PR review: {e.stderr}")
-        except json.JSONDecodeError as e:
-            raise GitHubError(f"Invalid JSON response: {e}")
+                # Use the raw API via PyGithub's requester
+                headers, data = self._github._Github__requester.requestJsonAndCheck(
+                    "POST",
+                    f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+                    input=payload
+                )
+
+                return {
+                    'id': data.get('id'),
+                    'node_id': data.get('node_id', ''),
+                    'html_url': data.get('html_url', ''),
+                    'user': data.get('user', {}),
+                    'body': data.get('body', ''),
+                    'state': data.get('state', ''),
+                    'submitted_at': data.get('submitted_at', '')
+                }
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"Failed to create PR review: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
