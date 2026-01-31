@@ -39,11 +39,16 @@ Botbaki is a GitHub App that:
 - Falls back to incremental sync when no mentions found
 - Fixes issue where comments don't update PR's `updated_at`
 
-### Feedback Collection (v0.2)
+### Feedback Collection (v0.3)
 
 - `@botbaki feedback <text>` stores feedback linked to most recent review
 - Feedback stored in `review_feedback` table
 - Bot acknowledges with "Thanks for the feedback!"
+- `botbaki feedback-report` command shows collected feedback with pattern analysis:
+  - Lists all feedback with review context (PR, commit, model, prompt)
+  - Extracts helpful/unhelpful/partial mentions from text
+  - Handles multi-item patterns ("Issues 3 and 4 were unhelpful")
+  - Calculates helpfulness ratio
 
 ### Polling Daemon (v0.2)
 
@@ -107,22 +112,17 @@ Proactively offer reviews to PR authors who want them.
 
 ### 3. Advanced Feedback Collection
 
-Improve feedback with per-suggestion tracking:
+Further improvements to feedback system:
 
-**Inline feedback mechanism:**
-- Each suggestion in the review gets a unique ID
-- Users can react or reply:
-  - 👍 / 👎 reactions on the comment
-  - `@botbaki +1 <id>` / `@botbaki -1 <id>` for specific suggestions
-  - `@botbaki feedback <id> <text>` for detailed feedback
+**Per-suggestion IDs:**
+- Each issue/suggestion in review gets a unique ID
+- `@botbaki +1 <id>` / `@botbaki -1 <id>` for quick feedback
+- Track reactions (👍/👎) on review comments
 
-**Feedback review process:**
-- `botbaki feedback-report` command to summarize:
-  - Most upvoted/downvoted suggestion patterns
-  - Common complaints
-  - Suggestions that were wrong vs. unhelpful vs. good
-- Update prompts/templates based on patterns
-- Track prompt versions and measure improvement over time
+**Prompt improvement tracking:**
+- Compare helpfulness ratios across prompt versions
+- Identify patterns in wrong/unhelpful suggestions
+- A/B test prompt changes
 
 ## Architecture
 
@@ -159,7 +159,7 @@ Improve feedback with per-suggestion tracking:
 
 1. ~~GitHub comment triggers~~ ✓
 2. ~~Inline review comments~~ ✓
-3. ~~Feedback collection (basic)~~ ✓
+3. ~~Feedback collection~~ ✓ (including feedback-report)
 4. **Webhooks** - for real-time response
 5. **Opt-in system** - proactive reviews for interested users
-6. **Advanced feedback** - per-suggestion tracking and reports
+6. **Advanced feedback** - per-suggestion IDs and reaction tracking
