@@ -742,8 +742,7 @@ def cmd_analyze_feedback(args: argparse.Namespace) -> int:
             since=args.since,
             prompt_path=args.prompt,
             dry_run=args.dry_run,
-            verbose=args.verbose,
-            force=args.force
+            verbose=args.verbose
         )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -829,8 +828,6 @@ def main() -> int:
                                help='Show what would be analyzed without calling API')
     analyze_parser.add_argument('--verbose', '-v', action='store_true',
                                help='Show progress during analysis')
-    analyze_parser.add_argument('--force', action='store_true',
-                               help='Overwrite output even if it has uncommitted git changes')
 
     args = parser.parse_args()
 

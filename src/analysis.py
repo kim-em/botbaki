@@ -291,32 +291,33 @@ def analyze_feedback(
     since: Optional[str] = None,
     prompt_path: Optional[str] = None,
     dry_run: bool = False,
-    verbose: bool = False,
-    force: bool = False
+    verbose: bool = False
 ) -> int:
     """
     Main entry point for feedback analysis.
+
+    Generates an improved prompt based on user feedback. The output is written
+    to a .new file for human review - it NEVER overwrites existing prompts.
 
     Args:
         since: Filter feedback since this date (YYYY-MM-DD)
         prompt_path: Override prompt template to improve (default: latest)
         dry_run: Just show what would be analyzed
         verbose: Show progress
-        force: Overwrite output even if it has uncommitted changes
 
     Returns:
         Exit code (0 for success)
     """
-    # 1. Determine output path
+    # 1. Determine output path - always write to .new file for review
     today = datetime.now().strftime('%Y-%m-%d')
-    output_path = Path(__file__).parent.parent / "prompts" / "mathlib4" / f"{today}.md"
+    base_path = Path(__file__).parent.parent / "prompts" / "mathlib4" / f"{today}.md"
+    output_path = Path(__file__).parent.parent / "prompts" / "mathlib4" / f"{today}.new.md"
 
-    # 2. Check if output file has uncommitted changes (skip for dry-run)
-    if not dry_run and output_path.exists() and not force:
-        if file_has_git_changes(output_path):
-            print(f"Error: {output_path} has uncommitted git changes.", file=sys.stderr)
-            print("Use --force to overwrite.", file=sys.stderr)
-            return 1
+    # 2. Safety: never overwrite, always create new file for review
+    if output_path.exists():
+        print(f"Error: {output_path} already exists.", file=sys.stderr)
+        print("Review and delete/rename it before running again.", file=sys.stderr)
+        return 1
 
     # 3. Load feedback entries
     feedback_entries = get_feedback_since(since)
@@ -336,7 +337,8 @@ def analyze_feedback(
         for entry in entries_with_reviews:
             date = entry['created_at'][:10] if entry['created_at'] else 'N/A'
             print(f"  PR #{entry['pr_number']} ({date}) - {entry['feedback_text'][:60]}...")
-        print(f"\nWould write to: {output_path}")
+        print(f"\nWould generate: {output_path}")
+        print(f"For review against: {base_path}")
         return 0
 
     # 4. Pass 1: Extract issues for each entry
@@ -395,9 +397,23 @@ def analyze_feedback(
 
     new_prompt = synthesize_new_prompt(current_prompt, issue_summaries, verbose=verbose)
 
-    # 6. Write to file and stdout
+    # 6. Write to .new file for review
     output_path.write_text(new_prompt)
-    print(f"Wrote {output_path}", file=sys.stderr)
+
+    print(f"\n{'='*70}", file=sys.stderr)
+    print("REVIEW REQUIRED", file=sys.stderr)
+    print(f"{'='*70}", file=sys.stderr)
+    print(f"\nGenerated: {output_path}", file=sys.stderr)
+    print(f"Current:   {base_path}", file=sys.stderr)
+    print(f"\nTo review the changes:", file=sys.stderr)
+    print(f"  diff {base_path} {output_path}", file=sys.stderr)
+    print(f"\nTo accept the changes:", file=sys.stderr)
+    print(f"  mv {output_path} {base_path}", file=sys.stderr)
+    print(f"\nTo reject:", file=sys.stderr)
+    print(f"  rm {output_path}", file=sys.stderr)
+    print(f"{'='*70}\n", file=sys.stderr)
+
+    # Also print the content to stdout for piping
     print(new_prompt)
 
     return 0
