@@ -440,15 +440,8 @@ def sync_single_pr(full_name: str, pr_number: int, request_delay: float = 0.9, v
     org_id = database.get_or_create_organization(repo_data['owner'])
     repo_id = database.get_or_create_repository(org_id, repo_data)
 
-    # Get PR data
-    prs = client.get_pulls(owner, repo, state='all', per_page=1)
-    if not prs:
-        raise ValueError(f"PR #{pr_number} not found")
-
-    # Find the specific PR (gh API doesn't support getting by number directly for pulls)
-    # We need to use a different approach - fetch from issues endpoint
-    pr_endpoint = f'/repos/{owner}/{repo}/pulls/{pr_number}'
-    pr_data = client.request(pr_endpoint)
+    # Get PR data directly by number
+    pr_data = client.get_pull(owner, repo, pr_number)
 
     # Store PR
     pr_id = database.store_or_update_pr(repo_id, pr_data)
