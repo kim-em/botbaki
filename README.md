@@ -12,7 +12,7 @@ AI-powered code review bot for GitHub pull requests, deployed as a GitHub App wi
 
 ## Bot Identity
 
-Botbaki runs as a GitHub App: **botbaki-review[bot]**
+Botbaki runs as a GitHub App: **botbaki[bot]**
 
 This provides:
 - Separate identity (not impersonating a user)
@@ -93,19 +93,51 @@ cd service && ./install.sh
 
 ```bash
 # Generate a review (outputs to stdout)
-./botbaki review leanprover-community/mathlib4 32904
+botbaki review leanprover-community/mathlib4 32904
+botbaki review leanprover-community/mathlib4 32904 --diff-only  # No timeline
+botbaki review leanprover-community/mathlib4 32904 --force      # Bypass cache
 
-# Review without timeline context
-./botbaki review leanprover-community/mathlib4 32904 --diff-only
+# Sync PR data from GitHub
+botbaki sync leanprover-community/mathlib4 --pr 32904           # Single PR
+botbaki sync leanprover-community/mathlib4 --incremental        # Changed PRs only
+botbaki sync leanprover-community/mathlib4 --since 2026-01-01   # Full sync since date
 
-# Force regeneration (bypass cache)
-./botbaki review leanprover-community/mathlib4 32904 --force
+# List and view PRs
+botbaki list leanprover-community/mathlib4 --state open --limit 20
+botbaki show leanprover-community/mathlib4 32904
 
-# Sync PR data
-./botbaki sync leanprover-community/mathlib4 --pr 32904
+# Search comments (FTS5 syntax)
+botbaki search "omega tactic"
+
+# Repository statistics
+botbaki stats leanprover-community/mathlib4
+botbaki stats leanprover-community/mathlib4 --author kim-em
 
 # Run daemon
-./botbaki daemon
+botbaki daemon
+botbaki daemon --repo leanprover-community/mathlib4 --interval 120
+
+# Check GitHub API rate limit
+botbaki rate-limit
+```
+
+### Feedback Commands
+
+```bash
+# Show feedback report (unhandled only, with emoji reactions)
+botbaki feedback-report
+botbaki feedback-report --all              # Include handled feedback
+botbaki feedback-report --since 2026-01-01 # Filter by date
+botbaki feedback-report --no-reactions     # Skip fetching reactions from GitHub
+
+# Analyze feedback and generate improved prompt
+botbaki analyze-feedback                   # Generate prompts/mathlib4/YYYY-MM-DD.md
+botbaki analyze-feedback --dry-run         # Preview without API calls
+botbaki analyze-feedback --verbose         # Show progress
+
+# Mark feedback as handled after incorporating into prompts
+botbaki mark-feedback-handled
+botbaki mark-feedback-handled --dry-run
 ```
 
 ### Daemon Mode
@@ -113,7 +145,7 @@ cd service && ./install.sh
 The daemon polls for `@botbaki` comments every 2 minutes:
 
 ```bash
-./botbaki daemon
+botbaki daemon
 ```
 
 Management (when installed as systemd service):
@@ -135,6 +167,7 @@ All credentials stored in `~/.config/botbaki/`:
 | `github-app-id` | GitHub App ID |
 | `github-app-key.pem` | GitHub App private key |
 | `github-installation-id` | Installation ID for target repo |
+| `github-app-slug` | App slug for bot login (optional, defaults to "botbaki") |
 
 ### Prompts
 
@@ -146,7 +179,7 @@ Review prompts are in `prompts/{repo}/YYYY-MM-DD.md`:
 
 ## Database
 
-SQLite database (`data/botbaki.db`) contains:
+SQLite database (`data/github_prs.db`) contains:
 
 - **pull_requests** - PR metadata
 - **commits** - Commits on PR branches
@@ -184,6 +217,7 @@ SQLite database (`data/botbaki.db`) contains:
 - `src/cli.py` - Command-line interface
 - `src/daemon.py` - Polling daemon
 - `src/review.py` - AI review generation with structured output
+- `src/analysis.py` - Feedback analysis and prompt improvement
 - `src/github_client.py` - GitHub App authentication via PyGithub
 - `src/sync.py` - PR data synchronization
 - `src/database.py` - SQLite operations
