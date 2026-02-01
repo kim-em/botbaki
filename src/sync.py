@@ -1,4 +1,17 @@
-"""Sync logic for GitHub PR data."""
+"""Sync logic for GitHub PR data.
+
+This module handles synchronization of PR data from GitHub to the local SQLite database:
+- full_sync(): Full sync of PRs updated since a given date
+- incremental_sync(): Update only PRs changed since last sync
+- sync_single_pr(): Sync a specific PR by number
+
+The sync process fetches:
+- PR metadata (title, body, state, author, etc.)
+- Commits on the PR branch
+- Review comments (inline code comments)
+- Issue comments (general discussion)
+- Reviews (approval/comment/request changes)
+"""
 
 from __future__ import annotations
 

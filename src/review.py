@@ -402,7 +402,9 @@ def generate_pr_review(
         if not prompt_info:
             raise ValueError(f"No prompts found for {repo}. Create prompts/{repo}/YYYY-MM-DD.md")
 
-    prompt_path, prompt_content, prompt_hash = prompt_info
+    prompt_path = prompt_info['path']
+    prompt_content = prompt_info['content']
+    prompt_hash = prompt_info['hash']
 
     if verbose:
         print(f"\nUsing prompt: {prompt_path}", file=sys.stderr)

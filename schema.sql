@@ -52,16 +52,6 @@ CREATE TABLE IF NOT EXISTS pull_requests (
   UNIQUE(repo_id, pr_number)
 );
 
--- PR labels (many-to-many)
-CREATE TABLE IF NOT EXISTS pr_labels (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  pr_id INTEGER NOT NULL REFERENCES pull_requests(id),
-  label_name TEXT NOT NULL,
-  label_color TEXT NOT NULL,
-  label_description TEXT,
-  UNIQUE(pr_id, label_name)
-);
-
 -- Commits on PR branches
 CREATE TABLE IF NOT EXISTS commits (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,19 +136,6 @@ CREATE TABLE IF NOT EXISTS reviews (
   UNIQUE(pr_id, review_id)
 );
 
--- Timeline events (for reconstructing PR state history)
-CREATE TABLE IF NOT EXISTS timeline_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  pr_id INTEGER NOT NULL REFERENCES pull_requests(id),
-  event_type TEXT NOT NULL,
-  actor_login TEXT,
-  actor_id INTEGER,
-  created_at TEXT NOT NULL,
-  event_data TEXT,
-  raw_json TEXT NOT NULL,
-  UNIQUE(pr_id, event_type, created_at, actor_login)
-);
-
 -- Sync state tracking per PR
 CREATE TABLE IF NOT EXISTS pr_sync_state (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,8 +144,7 @@ CREATE TABLE IF NOT EXISTS pr_sync_state (
   commits_synced INTEGER NOT NULL,
   review_comments_synced INTEGER NOT NULL,
   issue_comments_synced INTEGER NOT NULL,
-  reviews_synced INTEGER NOT NULL,
-  timeline_events_synced INTEGER NOT NULL
+  reviews_synced INTEGER NOT NULL
 );
 
 -- Sync state tracking per repository
@@ -189,8 +165,6 @@ CREATE INDEX IF NOT EXISTS idx_pull_requests_state ON pull_requests(state);
 CREATE INDEX IF NOT EXISTS idx_pull_requests_updated ON pull_requests(updated_at);
 CREATE INDEX IF NOT EXISTS idx_pull_requests_author ON pull_requests(author_login);
 
-CREATE INDEX IF NOT EXISTS idx_pr_labels_pr ON pr_labels(pr_id);
-
 CREATE INDEX IF NOT EXISTS idx_commits_pr ON commits(pr_id);
 CREATE INDEX IF NOT EXISTS idx_commits_date ON commits(committed_date);
 
@@ -204,10 +178,6 @@ CREATE INDEX IF NOT EXISTS idx_issue_comments_created ON issue_comments(created_
 CREATE INDEX IF NOT EXISTS idx_reviews_pr ON reviews(pr_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_state ON reviews(state);
 CREATE INDEX IF NOT EXISTS idx_reviews_submitted ON reviews(submitted_at);
-
-CREATE INDEX IF NOT EXISTS idx_timeline_events_pr ON timeline_events(pr_id);
-CREATE INDEX IF NOT EXISTS idx_timeline_events_type ON timeline_events(event_type);
-CREATE INDEX IF NOT EXISTS idx_timeline_events_created ON timeline_events(created_at);
 
 -- Full-text search virtual tables
 CREATE VIRTUAL TABLE IF NOT EXISTS review_comments_fts USING fts5(
@@ -234,19 +204,52 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pull_requests_fts USING fts5(
 );
 
 -- Triggers to keep FTS in sync
+-- FTS triggers for review_comments
 CREATE TRIGGER IF NOT EXISTS review_comments_ai AFTER INSERT ON review_comments BEGIN
   INSERT INTO review_comments_fts(rowid, body, author_login, path)
   VALUES (new.id, new.body, new.author_login, new.path);
 END;
 
+CREATE TRIGGER IF NOT EXISTS review_comments_au AFTER UPDATE ON review_comments BEGIN
+  DELETE FROM review_comments_fts WHERE rowid = old.id;
+  INSERT INTO review_comments_fts(rowid, body, author_login, path)
+  VALUES (new.id, new.body, new.author_login, new.path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS review_comments_ad AFTER DELETE ON review_comments BEGIN
+  DELETE FROM review_comments_fts WHERE rowid = old.id;
+END;
+
+-- FTS triggers for issue_comments
 CREATE TRIGGER IF NOT EXISTS issue_comments_ai AFTER INSERT ON issue_comments BEGIN
   INSERT INTO issue_comments_fts(rowid, body, author_login)
   VALUES (new.id, new.body, new.author_login);
 END;
 
+CREATE TRIGGER IF NOT EXISTS issue_comments_au AFTER UPDATE ON issue_comments BEGIN
+  DELETE FROM issue_comments_fts WHERE rowid = old.id;
+  INSERT INTO issue_comments_fts(rowid, body, author_login)
+  VALUES (new.id, new.body, new.author_login);
+END;
+
+CREATE TRIGGER IF NOT EXISTS issue_comments_ad AFTER DELETE ON issue_comments BEGIN
+  DELETE FROM issue_comments_fts WHERE rowid = old.id;
+END;
+
+-- FTS triggers for pull_requests
 CREATE TRIGGER IF NOT EXISTS pull_requests_ai AFTER INSERT ON pull_requests BEGIN
   INSERT INTO pull_requests_fts(rowid, title, body, author_login)
   VALUES (new.id, new.title, COALESCE(new.body, ''), new.author_login);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pull_requests_au AFTER UPDATE ON pull_requests BEGIN
+  DELETE FROM pull_requests_fts WHERE rowid = old.id;
+  INSERT INTO pull_requests_fts(rowid, title, body, author_login)
+  VALUES (new.id, new.title, COALESCE(new.body, ''), new.author_login);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pull_requests_ad AFTER DELETE ON pull_requests BEGIN
+  DELETE FROM pull_requests_fts WHERE rowid = old.id;
 END;
 
 -- AI-generated PR reviews

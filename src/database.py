@@ -1,4 +1,12 @@
-"""SQLite database operations for GitHub PR tracking."""
+"""SQLite database operations for GitHub PR tracking.
+
+This module provides the database layer for botbaki, handling:
+- PR metadata storage and retrieval
+- Comment and review storage
+- Sync state tracking
+- Full-text search across comments
+- AI review caching
+"""
 
 from __future__ import annotations
 
@@ -6,7 +14,39 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
+
+
+# TypedDicts for structured returns
+
+class TimelineEvent(TypedDict):
+    """A single event in a PR timeline."""
+    timestamp: str
+    type: str  # 'commit', 'review_comment', 'issue_comment', 'review'
+    actor: str
+    content: str
+    url: str
+    path: Optional[str]
+    line: Optional[int]
+    diff_hunk: Optional[str]
+
+
+class SearchResult(TypedDict):
+    """A search result from full-text search."""
+    pr_number: int
+    pr_title: str
+    source: str  # 'review_comment' or 'issue_comment'
+    body: str
+    author_login: str
+    created_at: str
+    html_url: str
+
+
+class PromptInfo(TypedDict):
+    """Information about a prompt file."""
+    path: str
+    content: str
+    hash: str
 
 # Database location
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -17,26 +57,77 @@ SCHEMA_FILE = Path(__file__).parent.parent / "schema.sql"
 with open(SCHEMA_FILE, 'r') as f:
     SCHEMA = f.read()
 
-_db: Optional[sqlite3.Connection] = None
+
+class Database:
+    """Database connection manager with lazy initialization.
+
+    Supports both singleton usage (for CLI) and explicit connection management
+    (for future web/concurrent usage).
+
+    Usage:
+        # Singleton (backwards compatible)
+        db = get_database()
+
+        # Explicit management
+        database = Database(custom_path)
+        conn = database.connect()
+        database.close()
+
+        # Context manager (future)
+        with Database() as conn:
+            conn.execute(...)
+    """
+
+    def __init__(self, db_path: Path = DB_PATH):
+        self.db_path = db_path
+        self._conn: Optional[sqlite3.Connection] = None
+
+    def connect(self) -> sqlite3.Connection:
+        """Get or create database connection."""
+        if self._conn is not None:
+            return self._conn
+
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self._conn = sqlite3.connect(self.db_path)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.executescript(SCHEMA)
+
+        return self._conn
+
+    def close(self) -> None:
+        """Close database connection."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self.connect()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+
+# Global singleton for backwards compatibility
+_default_db = Database()
 
 
 def get_database() -> sqlite3.Connection:
-    """Get or create database connection."""
-    global _db
-    if _db is not None:
-        return _db
-
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    _db = sqlite3.connect(DB_PATH)
-    _db.row_factory = sqlite3.Row
-    _db.executescript(SCHEMA)
-
-    return _db
+    """Get the default database connection (backwards compatible)."""
+    return _default_db.connect()
 
 
 def close_database() -> None:
-    """Close database connection."""
+    """Close the default database connection."""
+    _default_db.close()
+
+
+# Keep old global for any direct access (deprecated)
+_db: Optional[sqlite3.Connection] = None
+
+
+def _legacy_close_database() -> None:
+    """Legacy close function - deprecated, use close_database() instead."""
     global _db
     if _db is not None:
         _db.close()
@@ -382,8 +473,7 @@ def update_repo_sync_state(repo_id: int, timestamp: str, pr_count: int = None) -
 
 def update_pr_sync_state(pr_id: int, timestamp: str,
                          commits: int = 0, review_comments: int = 0,
-                         issue_comments: int = 0, reviews: int = 0,
-                         timeline_events: int = 0) -> None:
+                         issue_comments: int = 0, reviews: int = 0) -> None:
     """Update PR sync state."""
     db = get_database()
 
@@ -398,25 +488,25 @@ def update_pr_sync_state(pr_id: int, timestamp: str,
             UPDATE pr_sync_state
             SET last_synced_at = ?, commits_synced = ?,
                 review_comments_synced = ?, issue_comments_synced = ?,
-                reviews_synced = ?, timeline_events_synced = ?
+                reviews_synced = ?
             WHERE pr_id = ?
         """, (timestamp, commits, review_comments, issue_comments,
-              reviews, timeline_events, pr_id))
+              reviews, pr_id))
     else:
         db.execute("""
             INSERT INTO pr_sync_state
             (pr_id, last_synced_at, commits_synced, review_comments_synced,
-             issue_comments_synced, reviews_synced, timeline_events_synced)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+             issue_comments_synced, reviews_synced)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (pr_id, timestamp, commits, review_comments, issue_comments,
-              reviews, timeline_events))
+              reviews))
 
     db.commit()
 
 
 # Query operations
 
-def get_pr_timeline(pr_id: int) -> List[Dict[str, Any]]:
+def get_pr_timeline(pr_id: int) -> List[TimelineEvent]:
     """Get all activity for a PR in chronological order."""
     db = get_database()
 
@@ -471,7 +561,7 @@ def get_pr_timeline(pr_id: int) -> List[Dict[str, Any]]:
     return [dict(row) for row in cursor.fetchall()]
 
 
-def search_comments(query: str, limit: int = 50) -> List[Dict[str, Any]]:
+def search_comments(query: str, limit: int = 50) -> List[SearchResult]:
     """Full-text search across all comments."""
     db = get_database()
 
@@ -548,10 +638,10 @@ def get_pr_reviews(pr_id: int) -> List[Dict[str, Any]]:
     return [dict(row) for row in cursor.fetchall()]
 
 
-def get_latest_prompt_for_repo(repo_name: str) -> Optional[Tuple[str, str, str]]:
+def get_latest_prompt_for_repo(repo_name: str) -> Optional[PromptInfo]:
     """
     Find most recent prompt file for a repository.
-    Returns (prompt_path, prompt_content, prompt_hash) or None.
+    Returns PromptInfo dict with path, content, and hash, or None.
     """
     import hashlib
     prompts_dir = Path(__file__).parent.parent / "prompts" / repo_name
@@ -567,10 +657,14 @@ def get_latest_prompt_for_repo(repo_name: str) -> Optional[Tuple[str, str, str]]
     content = latest.read_text()
     content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    return (str(latest.relative_to(Path(__file__).parent.parent)), content, content_hash)
+    return PromptInfo(
+        path=str(latest.relative_to(Path(__file__).parent.parent)),
+        content=content,
+        hash=content_hash
+    )
 
 
-def get_prompt_by_date(repo_name: str, date: str) -> Optional[Tuple[str, str, str]]:
+def get_prompt_by_date(repo_name: str, date: str) -> Optional[PromptInfo]:
     """Get prompt for specific date (YYYY-MM-DD format)."""
     import hashlib
     prompt_file = Path(__file__).parent.parent / "prompts" / repo_name / f"{date}.md"
@@ -580,4 +674,8 @@ def get_prompt_by_date(repo_name: str, date: str) -> Optional[Tuple[str, str, st
     content = prompt_file.read_text()
     content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    return (str(prompt_file.relative_to(Path(__file__).parent.parent)), content, content_hash)
+    return PromptInfo(
+        path=str(prompt_file.relative_to(Path(__file__).parent.parent)),
+        content=content,
+        hash=content_hash
+    )

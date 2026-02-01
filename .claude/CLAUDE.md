@@ -31,6 +31,14 @@ When testing the daemon after clearing database records:
 - Use `botbaki sync <repo> --pr <number>` to force-sync a specific PR
 - Or wait for the next poll cycle to pick up @botbaki mentions
 
+## PLAN.md
+
+PLAN.md should be forward-looking only. Don't add notes about past cleanups or completed work there - the git log suffices for tracking history.
+
+## Prompts
+
+Keep all historical prompts in `prompts/`. Don't delete old prompt files - they're useful for understanding how the prompt evolved and for A/B testing.
+
 ## Deployment
 
 On chonk:
