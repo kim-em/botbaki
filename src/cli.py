@@ -724,6 +724,24 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
             print("\nNo structured feedback patterns detected.")
             print("(Looking for patterns like 'Issue 1 was helpful', 'Suggestion 2 was wrong')")
 
+        # Reaction feedback if requested
+        if getattr(args, 'reactions', False):
+            from . import analysis
+
+            print()
+            print("=" * 80)
+            print("EMOJI REACTIONS")
+            print("=" * 80)
+            print()
+            print("Fetching reactions from GitHub...")
+            reactions = analysis.get_reaction_feedback(
+                repository=args.repo,
+                since=args.since,
+                verbose=True
+            )
+            print()
+            print(analysis.format_reaction_summary(reactions))
+
         print()
         return 0
 
@@ -819,6 +837,10 @@ def main() -> int:
     # feedback-report command
     feedback_report_parser = subparsers.add_parser('feedback-report', help='Show collected feedback on reviews')
     feedback_report_parser.add_argument('--since', help='Only show feedback since this date (YYYY-MM-DD)')
+    feedback_report_parser.add_argument('--reactions', action='store_true',
+                                        help='Include emoji reactions on bot comments (fetches from GitHub)')
+    feedback_report_parser.add_argument('--repo', default='leanprover-community/mathlib4',
+                                        help='Repository for reactions (default: leanprover-community/mathlib4)')
 
     # analyze-feedback command
     analyze_parser = subparsers.add_parser('analyze-feedback',

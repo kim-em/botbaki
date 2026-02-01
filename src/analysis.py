@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import database
-from .github_client import GitHubClient
+from .github_client import GitHubClient, GitHubError
 from .review import format_diff_with_line_numbers, format_timeline_for_review
 from .sync import parse_repo_full_name
 
@@ -495,3 +496,217 @@ def mark_feedback_handled(
 
     print(f"Marked {count} feedback entries as handled.")
     return 0
+
+
+def get_reaction_feedback(
+    repository: str = "leanprover-community/mathlib4",
+    since: Optional[str] = None,
+    verbose: bool = False
+) -> List[Dict[str, Any]]:
+    """
+    Collect emoji reactions on bot's review comments as implicit feedback.
+
+    Fetches reactions on:
+    - Review comments posted by the bot (inline code comments)
+    - Issue comments posted by the bot (review summaries, help messages)
+
+    Args:
+        repository: Repository in format owner/repo
+        since: Only collect reactions since this date (YYYY-MM-DD)
+        verbose: Print progress
+
+    Returns:
+        List of dicts with reaction info:
+        - pr_number: PR where reaction was posted
+        - comment_type: 'review' or 'issue'
+        - comment_id: GitHub comment ID
+        - reaction: The reaction type (+1, -1, laugh, confused, etc.)
+        - reactor: GitHub login of person who reacted
+        - created_at: When reaction was posted
+        - path: For review comments, the file path
+        - line: For review comments, the line number
+    """
+    owner, repo = parse_repo_full_name(repository)
+    client = GitHubClient()
+
+    # Get bot's login
+    try:
+        bot_info = client.get_authenticated_user()
+        bot_login = bot_info['login']
+        if verbose:
+            print(f"Bot login: {bot_login}", file=sys.stderr)
+    except GitHubError as e:
+        print(f"Failed to get bot info: {e}", file=sys.stderr)
+        return []
+
+    db = database.get_database()
+
+    # Get repository
+    repo_row = database.get_repository_by_full_name(repository)
+    if not repo_row:
+        print(f"Repository {repository} not found in database", file=sys.stderr)
+        return []
+
+    repo_id = repo_row['id']
+
+    # Build query for bot's comments
+    since_filter = ""
+    params = [repo_id, bot_login]
+    if since:
+        since_filter = " AND rc.created_at >= ?"
+        params.append(since)
+
+    # Find review comments by bot
+    review_comments_query = f"""
+        SELECT
+            rc.comment_id,
+            rc.path,
+            rc.line,
+            rc.created_at,
+            pr.pr_number
+        FROM review_comments rc
+        JOIN pull_requests pr ON pr.id = rc.pr_id
+        WHERE pr.repo_id = ?
+          AND rc.author_login = ?
+          {since_filter}
+    """
+
+    cursor = db.execute(review_comments_query, params)
+    review_comments = [dict(row) for row in cursor.fetchall()]
+
+    # Find issue comments by bot
+    params = [repo_id, bot_login]
+    if since:
+        params.append(since)
+
+    issue_comments_query = f"""
+        SELECT
+            ic.comment_id,
+            ic.created_at,
+            pr.pr_number
+        FROM issue_comments ic
+        JOIN pull_requests pr ON pr.id = ic.pr_id
+        WHERE pr.repo_id = ?
+          AND ic.author_login = ?
+          {since_filter.replace('rc.', 'ic.')}
+    """
+
+    cursor = db.execute(issue_comments_query, params)
+    issue_comments = [dict(row) for row in cursor.fetchall()]
+
+    if verbose:
+        print(f"Found {len(review_comments)} review comments and {len(issue_comments)} issue comments by bot",
+              file=sys.stderr)
+
+    reactions = []
+
+    # Fetch reactions on review comments
+    for comment in review_comments:
+        try:
+            comment_reactions = client.get_review_comment_reactions(
+                owner, repo, comment['comment_id']
+            )
+            for r in comment_reactions:
+                reactions.append({
+                    'pr_number': comment['pr_number'],
+                    'comment_type': 'review',
+                    'comment_id': comment['comment_id'],
+                    'reaction': r['content'],
+                    'reactor': r['user'],
+                    'created_at': r['created_at'],
+                    'path': comment['path'],
+                    'line': comment['line']
+                })
+        except GitHubError as e:
+            if verbose:
+                print(f"  Failed to get reactions for review comment {comment['comment_id']}: {e}",
+                      file=sys.stderr)
+
+    # Fetch reactions on issue comments
+    for comment in issue_comments:
+        try:
+            comment_reactions = client.get_issue_comment_reactions(
+                owner, repo, comment['comment_id']
+            )
+            for r in comment_reactions:
+                reactions.append({
+                    'pr_number': comment['pr_number'],
+                    'comment_type': 'issue',
+                    'comment_id': comment['comment_id'],
+                    'reaction': r['content'],
+                    'reactor': r['user'],
+                    'created_at': r['created_at'],
+                    'path': None,
+                    'line': None
+                })
+        except GitHubError as e:
+            if verbose:
+                print(f"  Failed to get reactions for issue comment {comment['comment_id']}: {e}",
+                      file=sys.stderr)
+
+    if verbose:
+        print(f"Total reactions collected: {len(reactions)}", file=sys.stderr)
+
+    return reactions
+
+
+def format_reaction_summary(reactions: List[Dict[str, Any]]) -> str:
+    """
+    Format reactions into a summary string.
+
+    Args:
+        reactions: List of reaction dicts from get_reaction_feedback()
+
+    Returns:
+        Formatted summary string
+    """
+    if not reactions:
+        return "No reactions found on bot's comments."
+
+    # Count by reaction type
+    reaction_counts = Counter(r['reaction'] for r in reactions)
+
+    # Map reaction codes to emoji
+    emoji_map = {
+        '+1': '👍',
+        '-1': '👎',
+        'laugh': '😄',
+        'confused': '😕',
+        'heart': '❤️',
+        'hooray': '🎉',
+        'rocket': '🚀',
+        'eyes': '👀'
+    }
+
+    lines = []
+    lines.append(f"Total reactions: {len(reactions)}")
+    lines.append("")
+
+    # Show counts with emoji
+    for reaction, count in reaction_counts.most_common():
+        emoji = emoji_map.get(reaction, reaction)
+        lines.append(f"  {emoji} {reaction}: {count}")
+
+    # Break down positive vs negative
+    positive = sum(1 for r in reactions if r['reaction'] in ['+1', 'heart', 'hooray', 'rocket'])
+    negative = sum(1 for r in reactions if r['reaction'] in ['-1', 'confused'])
+    neutral = len(reactions) - positive - negative
+
+    lines.append("")
+    lines.append(f"Sentiment: +{positive} / -{negative} / ~{neutral}")
+
+    if positive + negative > 0:
+        ratio = positive / (positive + negative)
+        lines.append(f"Positive ratio: {ratio:.0%}")
+
+    # Show breakdown by PR
+    pr_reactions = Counter(r['pr_number'] for r in reactions)
+    if len(pr_reactions) > 1:
+        lines.append("")
+        lines.append("By PR:")
+        for pr_num, count in pr_reactions.most_common(5):
+            lines.append(f"  PR #{pr_num}: {count} reactions")
+        if len(pr_reactions) > 5:
+            lines.append(f"  ... and {len(pr_reactions) - 5} more PRs")
+
+    return "\n".join(lines)

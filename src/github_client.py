@@ -587,6 +587,122 @@ class GitHubClient:
 
         raise GitHubError("Unexpected error in request retry loop")
 
+    def get_authenticated_user(self) -> Dict[str, Any]:
+        """Get the authenticated user (the GitHub App's bot account).
+
+        For GitHub Apps, this returns the bot user like 'my-app[bot]'.
+        """
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                # For GitHub Apps, we need to get the app info first
+                headers, data = self._github._Github__requester.requestJsonAndCheck(
+                    "GET", "/app"
+                )
+
+                # The bot login is <app-slug>[bot]
+                bot_login = f"{data['slug']}[bot]"
+                return {
+                    'login': bot_login,
+                    'id': data['id'],
+                    'name': data['name'],
+                    'slug': data['slug']
+                }
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
+
+    def get_review_comment_reactions(
+        self,
+        owner: str,
+        repo: str,
+        comment_id: int
+    ) -> List[Dict[str, Any]]:
+        """Get reactions on a pull request review comment.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            comment_id: The review comment ID (not db id)
+
+        Returns:
+            List of reaction dicts with user and content (reaction type)
+        """
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                headers, data = self._github._Github__requester.requestJsonAndCheck(
+                    "GET",
+                    f"/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions",
+                    headers={'Accept': 'application/vnd.github+json'}
+                )
+
+                results = []
+                for r in data:
+                    results.append({
+                        'id': r.get('id'),
+                        'user': r.get('user', {}).get('login'),
+                        'content': r.get('content'),  # +1, -1, laugh, confused, heart, hooray, rocket, eyes
+                        'created_at': r.get('created_at', '')
+                    })
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
+
+    def get_issue_comment_reactions(
+        self,
+        owner: str,
+        repo: str,
+        comment_id: int
+    ) -> List[Dict[str, Any]]:
+        """Get reactions on an issue comment.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            comment_id: The issue comment ID
+
+        Returns:
+            List of reaction dicts with user and content (reaction type)
+        """
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                headers, data = self._github._Github__requester.requestJsonAndCheck(
+                    "GET",
+                    f"/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions",
+                    headers={'Accept': 'application/vnd.github+json'}
+                )
+
+                results = []
+                for r in data:
+                    results.append({
+                        'id': r.get('id'),
+                        'user': r.get('user', {}).get('login'),
+                        'content': r.get('content'),
+                        'created_at': r.get('created_at', '')
+                    })
+                return results
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
+
     def create_pull_request_review(
         self,
         owner: str,
