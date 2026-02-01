@@ -591,31 +591,22 @@ class GitHubClient:
         """Get the authenticated user (the GitHub App's bot account).
 
         For GitHub Apps, this returns the bot user like 'my-app[bot]'.
+        Reads the app slug from config file or falls back to 'botbaki'.
         """
-        self._rate_limit_delay()
+        config_dir = Path.home() / ".config" / "botbaki"
+        slug_file = config_dir / "github-app-slug"
 
-        for attempt in range(MAX_RETRIES):
-            try:
-                # For GitHub Apps, we need to get the app info first
-                headers, data = self._github._Github__requester.requestJsonAndCheck(
-                    "GET", "/app"
-                )
+        if slug_file.exists():
+            slug = slug_file.read_text().strip()
+        else:
+            # Default to 'botbaki' if no slug file
+            slug = "botbaki"
 
-                # The bot login is <app-slug>[bot]
-                bot_login = f"{data['slug']}[bot]"
-                return {
-                    'login': bot_login,
-                    'id': data['id'],
-                    'name': data['name'],
-                    'slug': data['slug']
-                }
-
-            except RateLimitExceededException as e:
-                self._handle_rate_limit(e, attempt)
-            except GithubException as e:
-                raise GitHubError(f"GitHub API error: {e}")
-
-        raise GitHubError("Unexpected error in request retry loop")
+        bot_login = f"{slug}[bot]"
+        return {
+            'login': bot_login,
+            'slug': slug
+        }
 
     def get_review_comment_reactions(
         self,
@@ -700,6 +691,92 @@ class GitHubClient:
                 self._handle_rate_limit(e, attempt)
             except GithubException as e:
                 raise GitHubError(f"GitHub API error: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
+
+    def create_issue_comment_reaction(
+        self,
+        owner: str,
+        repo: str,
+        comment_id: int,
+        content: str = "+1"
+    ) -> Dict[str, Any]:
+        """Add a reaction to an issue comment.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            comment_id: The issue comment ID
+            content: Reaction type (+1, -1, laugh, confused, heart, hooray, rocket, eyes)
+
+        Returns:
+            Dict with reaction id and details
+        """
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                headers, data = self._github._Github__requester.requestJsonAndCheck(
+                    "POST",
+                    f"/repos/{owner}/{repo}/issues/comments/{comment_id}/reactions",
+                    headers={'Accept': 'application/vnd.github+json'},
+                    input={'content': content}
+                )
+
+                return {
+                    'id': data.get('id'),
+                    'content': data.get('content'),
+                    'user': data.get('user', {}).get('login'),
+                    'created_at': data.get('created_at', '')
+                }
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"Failed to create reaction: {e}")
+
+        raise GitHubError("Unexpected error in request retry loop")
+
+    def create_review_comment_reaction(
+        self,
+        owner: str,
+        repo: str,
+        comment_id: int,
+        content: str = "+1"
+    ) -> Dict[str, Any]:
+        """Add a reaction to a pull request review comment.
+
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            comment_id: The review comment ID
+            content: Reaction type (+1, -1, laugh, confused, heart, hooray, rocket, eyes)
+
+        Returns:
+            Dict with reaction id and details
+        """
+        self._rate_limit_delay()
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                headers, data = self._github._Github__requester.requestJsonAndCheck(
+                    "POST",
+                    f"/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions",
+                    headers={'Accept': 'application/vnd.github+json'},
+                    input={'content': content}
+                )
+
+                return {
+                    'id': data.get('id'),
+                    'content': data.get('content'),
+                    'user': data.get('user', {}).get('login'),
+                    'created_at': data.get('created_at', '')
+                }
+
+            except RateLimitExceededException as e:
+                self._handle_rate_limit(e, attempt)
+            except GithubException as e:
+                raise GitHubError(f"Failed to create reaction: {e}")
 
         raise GitHubError("Unexpected error in request retry loop")
 
