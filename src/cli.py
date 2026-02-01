@@ -742,7 +742,8 @@ def cmd_analyze_feedback(args: argparse.Namespace) -> int:
             since=args.since,
             prompt_path=args.prompt,
             dry_run=args.dry_run,
-            verbose=args.verbose
+            verbose=args.verbose,
+            include_handled=args.all
         )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -828,6 +829,15 @@ def main() -> int:
                                help='Show what would be analyzed without calling API')
     analyze_parser.add_argument('--verbose', '-v', action='store_true',
                                help='Show progress during analysis')
+    analyze_parser.add_argument('--all', action='store_true',
+                               help='Include already-handled feedback (default: only unhandled)')
+
+    # mark-feedback-handled command
+    mark_parser = subparsers.add_parser('mark-feedback-handled',
+                                        help='Mark feedback as handled after prompt update')
+    mark_parser.add_argument('--since', help='Only mark feedback since this date (YYYY-MM-DD)')
+    mark_parser.add_argument('--dry-run', action='store_true',
+                            help='Show what would be marked without making changes')
 
     args = parser.parse_args()
 
@@ -856,8 +866,25 @@ def main() -> int:
         return cmd_feedback_report(args)
     elif args.command == 'analyze-feedback':
         return cmd_analyze_feedback(args)
+    elif args.command == 'mark-feedback-handled':
+        return cmd_mark_feedback_handled(args)
     else:
         parser.print_help()
+        return 1
+
+
+def cmd_mark_feedback_handled(args: argparse.Namespace) -> int:
+    """Handle mark-feedback-handled command."""
+    try:
+        from . import analysis
+        return analysis.mark_feedback_handled(
+            since=args.since,
+            dry_run=args.dry_run
+        )
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         return 1
 
 

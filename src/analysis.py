@@ -15,17 +15,28 @@ from .review import format_diff_with_line_numbers, format_timeline_for_review
 from .sync import parse_repo_full_name
 
 
-def get_feedback_since(since: Optional[str] = None) -> List[Dict]:
+def get_feedback_since(
+    since: Optional[str] = None,
+    include_handled: bool = False
+) -> List[Dict]:
     """
     Get feedback entries with their associated review data.
 
     Args:
         since: Optional date string (YYYY-MM-DD) to filter feedback from
+        include_handled: If False (default), only return unhandled feedback
 
     Returns:
         List of dicts with feedback and review information
     """
     db = database.get_database()
+
+    # Ensure handled_at column exists (backwards compatibility)
+    try:
+        db.execute("ALTER TABLE review_feedback ADD COLUMN handled_at TEXT")
+        db.commit()
+    except Exception:
+        pass  # Column already exists
 
     # Check if new columns exist (backwards compatibility)
     try:
@@ -35,11 +46,15 @@ def get_feedback_since(since: Optional[str] = None) -> List[Dict]:
         has_new_columns = False
 
     # Build WHERE clause
-    where_clause = ""
+    conditions = []
     params = []
     if since:
-        where_clause = "WHERE rf.created_at >= ?"
+        conditions.append("rf.created_at >= ?")
         params.append(since)
+    if not include_handled:
+        conditions.append("rf.handled_at IS NULL")
+
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     if has_new_columns:
         query = f"""
@@ -301,7 +316,8 @@ def analyze_feedback(
     since: Optional[str] = None,
     prompt_path: Optional[str] = None,
     dry_run: bool = False,
-    verbose: bool = False
+    verbose: bool = False,
+    include_handled: bool = False
 ) -> int:
     """
     Main entry point for feedback analysis.
@@ -313,6 +329,7 @@ def analyze_feedback(
         prompt_path: Override prompt template to improve (default: latest)
         dry_run: Just show what would be analyzed
         verbose: Show progress
+        include_handled: Include already-handled feedback (default: False)
 
     Returns:
         Exit code (0 for success)
@@ -328,7 +345,7 @@ def analyze_feedback(
         return 1
 
     # 3. Load feedback entries
-    feedback_entries = get_feedback_since(since)
+    feedback_entries = get_feedback_since(since, include_handled=include_handled)
 
     if not feedback_entries:
         print("No feedback entries found.")
@@ -408,7 +425,73 @@ def analyze_feedback(
     output_path.write_text(new_prompt)
     print(f"Wrote {output_path}", file=sys.stderr)
 
+    # Show follow-up command
+    print(f"\nTo mark this feedback as handled:", file=sys.stderr)
+    if since:
+        print(f"  botbaki mark-feedback-handled --since {since}", file=sys.stderr)
+    else:
+        print(f"  botbaki mark-feedback-handled", file=sys.stderr)
+
     # Also print to stdout
     print(new_prompt)
 
+    return 0
+
+
+def mark_feedback_handled(
+    since: Optional[str] = None,
+    dry_run: bool = False
+) -> int:
+    """
+    Mark feedback entries as handled (incorporated into prompt updates).
+
+    Args:
+        since: Only mark feedback since this date (YYYY-MM-DD)
+        dry_run: Just show what would be marked
+
+    Returns:
+        Exit code (0 for success)
+    """
+    db = database.get_database()
+
+    # Ensure handled_at column exists
+    try:
+        db.execute("ALTER TABLE review_feedback ADD COLUMN handled_at TEXT")
+        db.commit()
+    except Exception:
+        pass
+
+    # Build WHERE clause
+    conditions = ["handled_at IS NULL"]
+    params = []
+    if since:
+        conditions.append("created_at >= ?")
+        params.append(since)
+
+    where_clause = " AND ".join(conditions)
+
+    # Count entries
+    cursor = db.execute(
+        f"SELECT COUNT(*) FROM review_feedback WHERE {where_clause}",
+        params
+    )
+    count = cursor.fetchone()[0]
+
+    if count == 0:
+        print("No unhandled feedback entries to mark.")
+        return 0
+
+    if dry_run:
+        print(f"Would mark {count} feedback entries as handled.")
+        return 0
+
+    # Mark as handled
+    now = datetime.now().isoformat()
+    db.execute(
+        f"UPDATE review_feedback SET handled_at = ? WHERE {where_clause}",
+        [now] + params
+    )
+    db.commit()
+
+    print(f"Marked {count} feedback entries as handled.")
     return 0
