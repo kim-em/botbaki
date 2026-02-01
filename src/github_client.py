@@ -591,7 +591,7 @@ class GitHubClient:
         """Get the authenticated user (the GitHub App's bot account).
 
         For GitHub Apps, this returns the bot user like 'my-app[bot]'.
-        Reads the app slug from config file or falls back to 'botbaki'.
+        Reads the app slug from config file or falls back to 'botbaki-review'.
         """
         config_dir = Path.home() / ".config" / "botbaki"
         slug_file = config_dir / "github-app-slug"
@@ -599,8 +599,8 @@ class GitHubClient:
         if slug_file.exists():
             slug = slug_file.read_text().strip()
         else:
-            # Default to 'botbaki' if no slug file
-            slug = "botbaki"
+            # Default to 'botbaki-review' if no slug file
+            slug = "botbaki-review"
 
         bot_login = f"{slug}[bot]"
         return {

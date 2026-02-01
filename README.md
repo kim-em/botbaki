@@ -12,7 +12,7 @@ AI-powered code review bot for GitHub pull requests, deployed as a GitHub App wi
 
 ## Bot Identity
 
-Botbaki runs as a GitHub App: **botbaki[bot]**
+Botbaki runs as a GitHub App: **botbaki-review[bot]**
 
 This provides:
 - Separate identity (not impersonating a user)
