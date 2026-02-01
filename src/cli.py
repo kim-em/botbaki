@@ -508,12 +508,23 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
         except Exception:
             has_new_columns = False
 
-        # Build WHERE clause for --since filter
-        since_filter = ""
+        # Ensure handled_at column exists
+        try:
+            db.execute("SELECT handled_at FROM review_feedback LIMIT 1")
+            has_handled_column = True
+        except Exception:
+            has_handled_column = False
+
+        # Build WHERE clause
+        conditions = []
         params = []
         if args.since:
-            since_filter = "WHERE rf.created_at >= ?"
+            conditions.append("rf.created_at >= ?")
             params.append(args.since)
+        if has_handled_column and not getattr(args, 'all', False):
+            conditions.append("rf.handled_at IS NULL")
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
         # Query all feedback with review context
         if has_new_columns:
@@ -533,7 +544,7 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
                     rf.line
                 FROM review_feedback rf
                 LEFT JOIN pr_reviews pr ON rf.review_id = pr.id
-                {since_filter}
+                {where_clause}
                 ORDER BY rf.created_at DESC
             """
         else:
@@ -553,14 +564,17 @@ def cmd_feedback_report(args: argparse.Namespace) -> int:
                     NULL as line
                 FROM review_feedback rf
                 LEFT JOIN pr_reviews pr ON rf.review_id = pr.id
-                {since_filter}
+                {where_clause}
                 ORDER BY rf.created_at DESC
             """
         cursor = db.execute(query, params)
         rows = cursor.fetchall()
 
         if not rows:
-            print("No feedback collected yet.")
+            if getattr(args, 'all', False):
+                print("No feedback collected yet.")
+            else:
+                print("No unhandled feedback. Use --all to include handled feedback.")
             return 0
 
         # Parse feedback for patterns
@@ -837,6 +851,8 @@ def main() -> int:
     # feedback-report command
     feedback_report_parser = subparsers.add_parser('feedback-report', help='Show collected feedback on reviews')
     feedback_report_parser.add_argument('--since', help='Only show feedback since this date (YYYY-MM-DD)')
+    feedback_report_parser.add_argument('--all', action='store_true',
+                                        help='Include already-handled feedback (default: only unhandled)')
     feedback_report_parser.add_argument('--no-reactions', action='store_true',
                                         help='Skip fetching emoji reactions from GitHub')
     feedback_report_parser.add_argument('--repo', default='leanprover-community/mathlib4',
