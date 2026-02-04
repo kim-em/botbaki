@@ -17,6 +17,7 @@ from .github_client import GitHubClient, GitHubError
 POLL_INTERVAL = 120  # 2 minutes
 DEFAULT_REPOSITORY = "leanprover-community/mathlib4"
 TRIGGER_PATTERN = re.compile(r'@botbaki\s+(\w+)(?:\s+(.*))?', re.IGNORECASE)
+REQUIRE_PR_AUTHOR_FOR_REVIEW = True  # Only PR author can request reviews
 
 # Supported commands
 COMMANDS = {
@@ -296,6 +297,20 @@ class Daemon:
             return
 
         current_commit = pr_row['head_sha']
+        pr_author = pr_row['author_login']
+
+        # Only allow PR author to request reviews (if enabled)
+        if REQUIRE_PR_AUTHOR_FOR_REVIEW and author.lower() != pr_author.lower():
+            self.log(f"  Review requested by {author}, but PR author is {pr_author} - rejecting")
+            response = (
+                f"@{author} Apologies, but for now botbaki reviews must be requested by the PR author."
+            )
+            try:
+                self.client.post_issue_comment(self.owner, self.repo, pr_number, response)
+            except GitHubError:
+                pass  # Best effort
+            self._mark_processed(comment_id, pr_id, author, "review", error="Not PR author")
+            return
 
         # Check if we already posted a review for this commit
         existing_response = self._get_existing_review_for_commit(pr_id, current_commit)
