@@ -69,7 +69,7 @@ Deployed to `chonk.lean-fro.org` as a systemd service:
 - Logs: `journalctl -u botbaki -f`
 - Config: `~/.config/botbaki/env` (contains `ANTHROPIC_API_KEY`)
 - GitHub App credentials: `~/.config/botbaki/github-app-*`
-- Data: `~/projects/botbaki/data/botbaki.db`
+- Data: `~/projects/botbaki/data/github_prs.db`
 
 **Management:**
 ```bash
